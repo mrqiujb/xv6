@@ -9,7 +9,7 @@
 #include "file.h"
 
 #define PIPESIZE 512
-
+//512*1B =512B 32*4B=128B
 struct pipe {
   struct spinlock lock;
   char data[PIPESIZE];
