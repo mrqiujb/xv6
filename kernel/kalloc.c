@@ -29,6 +29,17 @@ kinit()
   initlock(&kmem.lock, "kmem");
   freerange(end, (void*)PHYSTOP);
 }
+uint64 getkmemfree()
+{
+  uint64 num=0;
+  struct run *p=kmem.freelist;
+  while (p)
+  {
+    p=p->next;
+    num++;
+  }
+  return num*PGSIZE;
+}
 
 void
 freerange(void *pa_start, void *pa_end)
