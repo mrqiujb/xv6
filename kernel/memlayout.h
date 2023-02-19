@@ -20,16 +20,20 @@
 // qemu puts UART registers here in physical memory.
 #define UART0 0x10000000L
 #define UART0_IRQ 10
-
+// 从fig3.3上看UART与VIRTIO连着 VIRTIO基地址为0x10001000
+// UART基地址为0x10000000L 所以VIRTIO基地址为0x10001000-0x10000000L
+// 为0x1000 = 1000000000000 = 2^(13-1)=4KB=PGSIZE
+// 所以UART0占一页
 // virtio mmio interface
 #define VIRTIO0 0x10001000
 #define VIRTIO0_IRQ 1
 
+// CLINT 长度为0x10000
 // local interrupt controller, which contains the timer.
 #define CLINT 0x2000000L
 #define CLINT_MTIMECMP(hartid) (CLINT + 0x4000 + 8*(hartid))
 #define CLINT_MTIME (CLINT + 0xBFF8) // cycles since boot.
-
+// PLIC长度为0x400000
 // qemu puts programmable interrupt controller here.
 #define PLIC 0x0c000000L
 #define PLIC_PRIORITY (PLIC + 0x0)

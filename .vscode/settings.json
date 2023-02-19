@@ -1,0 +1,10 @@
+{
+    "C_Cpp.default.configurationProvider": "ms-vscode.makefile-tools",
+    "files.associations": {
+        "spinlock.h": "c",
+        "user.h": "c",
+        "sysinfo.h": "c",
+        "memlayout.h": "c",
+        "types.h": "c"
+    }
+}
