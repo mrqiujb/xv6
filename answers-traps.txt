@@ -1,0 +1,70 @@
+1
+Which registers contain arguments to functions? For example, which register holds 13 in main's call to printf?
+
+那些寄存器保存了函数的参数？例如那个寄存器保存了13在main调用printf的时候？
+
+根据riscv手册我们知道a0-a7保存了函数的参数，这个参数可以是任何形式 int char 或者 point 最后都会转为uint的形式传递，然后根据约定将其恢复到原来的样子。在syscall中我们约定将系统调用号放在a7寄存器中，所以syscall function总是去a7寻找系统调用号
+
+2
+Where is the call to function f in the assembly code for main? Where is the call to g? (Hint: the compiler may inline functions.)
+
+在什么地方汇编的主函数调用了函数f，又是在什么地方调用了g函数？提示 编译器会使用内联函数
+
+没有调用 直接计算 然后变成了立即数
+
+3
+At what address is the function printf located?
+
+print函数的地址在哪？
+
+0x628的位置
+
+4
+What value is in the register ra just after the jalr to printf in main?
+
+在main函数中 jalr之后是什么值在ra寄存器里面
+
+ra放置的是返回的地址，也就算跳转前pc的值 （有的地方是pc+1）在这里应该是pc 因为uservec专门计算了一次。
+
+5
+Run the following code.
+
+	unsigned int i = 0x00646c72;
+	printf("H%x Wo%s", 57616, &i);
+  
+What is the output? Here's an ASCII table that maps bytes to characters.
+The output depends on that fact that the RISC-V is little-endian. If the RISC-V were instead big-endian what would you set i to in order to yield the same output? Would you need to change 57616 to a different value?
+
+Here's a description of little- and big-endian and a more whimsical description.
+
+57616=0xe11=1110 0001 0001 0000
+little存储 
+00010000
+11100001
+
+0x00646c72-》rld0
+
+如果要相反 那么字符需要反过来 数字不变
+
+
+
+6
+In the following code, what is going to be printed after 'y='? (note: the answer is not a specific value.) Why does this happen?
+
+	printf("x=%d y=%d", 3);
+      
+printf函数认为有三个参数 format字符串 x y 但是只给了两个字符串 分别位于 a0 a1 a2 那么x匹配到a1 因为a2没有被初始化所以是不确定的值以%d的形式给出
+
+  printf("x=%d y=%d",3);
+  24:	458d                	li	a1,3
+  26:	00000517          	auipc	a0,0x0
+  2a:	7ba50513          	addi	a0,a0,1978 # 7e0 <malloc+0xe8>
+  2e:	00000097          	auipc	ra,0x0
+  32:	60c080e7          	jalr	1548(ra) # 63a <printf>
+  printf("%d %d\n", f(8)+1, 13);
+  36:	4635                	li	a2,13
+  38:	45b1                	li	a1,12
+  3a:	00000517          	auipc	a0,0x0
+  3e:	7b650513          	addi	a0,a0,1974 # 7f0 <malloc+0xf8>
+  42:	00000097          	auipc	ra,0x0
+  46:	5f8080e7          	jalr	1528(ra) # 63a <printf>

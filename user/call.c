@@ -12,6 +12,13 @@ int f(int x) {
 }
 
 void main(void) {
+  printf("sleep test begin\n");
+  sleep(10);
+  printf("sleep test end\n");
+
+
+  unsigned int i = 0x00646c72;
+	printf("H%x Wo%s", 57616, &i);
   printf("%d %d\n", f(8)+1, 13);
   exit(0);
 }

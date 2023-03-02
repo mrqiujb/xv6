@@ -9,6 +9,7 @@
 .align 4
 kernelvec:
         // make room to save registers.
+        //和uservec的功能差不多
         addi sp, sp, -256
 
         // save the registers.
@@ -45,6 +46,7 @@ kernelvec:
         sd t6, 240(sp)
 
 	// call the C trap handler in trap.c
+        //跳转到kernneltrap函数和user差不多
         call kerneltrap
 
         // restore registers.

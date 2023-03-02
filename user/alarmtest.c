@@ -29,13 +29,7 @@ main(int argc, char *argv[])
 
 volatile static int count;
 
-void
-periodic()
-{
-  count = count + 1;
-  printf("alarm!\n");
-  sigreturn();
-}
+
 
 // tests whether the kernel calls
 // the alarm handler even a single time.
@@ -139,7 +133,13 @@ test2()
     printf("test2 passed\n");
   }
 }
-
+void
+periodic()
+{
+  count = count + 1;
+  printf("alarm!\n");
+  sigreturn();
+}
 void
 slow_handler()
 {

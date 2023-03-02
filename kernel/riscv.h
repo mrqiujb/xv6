@@ -6,7 +6,14 @@ r_mhartid()
   asm volatile("csrr %0, mhartid" : "=r" (x) );
   return x;
 }
-
+//返回s0的内容
+static inline uint64
+r_fp()
+{
+  uint64 x;
+  asm volatile("mv %0, s0" : "=r" (x) );
+  return x;
+}
 // Machine Status Register, mstatus
 
 #define MSTATUS_MPP_MASK (3L << 11) // previous mode.
@@ -110,7 +117,8 @@ w_mie(uint64 x)
 {
   asm volatile("csrw mie, %0" : : "r" (x));
 }
-
+//这里保存pc指针 
+//因为将要执行异常处理程序也就是pc会被stvec覆盖
 // machine exception program counter, holds the
 // instruction address to which a return from
 // exception will go.
@@ -158,6 +166,8 @@ w_mideleg(uint64 x)
   asm volatile("csrw mideleg, %0" : : "r" (x));
 }
 
+//trap处理程序的地址 由kernel写入 
+//跳转到这里处理trap
 // Supervisor Trap-Vector Base Address
 // low two bits are mode.
 static inline void 
@@ -201,7 +211,7 @@ r_satp()
   asm volatile("csrr %0, satp" : "=r" (x) );
   return x;
 }
-
+//由内核给出的 供中断处理程序使用的 一个变量
 // Supervisor Scratch register, for early trap handler in trampoline.S.
 static inline void 
 w_sscratch(uint64 x)
@@ -216,6 +226,7 @@ w_mscratch(uint64 x)
 }
 
 // Supervisor Trap Cause
+//trap的原因
 static inline uint64
 r_scause()
 {
@@ -256,7 +267,8 @@ r_time()
   asm volatile("csrr %0, time" : "=r" (x) );
   return x;
 }
-
+//这里面有个SIE位 标志是否启用中断，若未启用中断则不会进入直到启用为止
+//SPP位标志 此中断的来源为用户模式或者是kernel模式 并根据此来确定sret
 // enable device interrupts
 static inline void
 intr_on()
