@@ -183,5 +183,8 @@ void            virtio_disk_init(void);
 void            virtio_disk_rw(struct buf *, int);
 void            virtio_disk_intr(void);
 
+//pagefault.c
+uint64          uvm_check_unpaged(uint64 pgfault_va);
+uint64          uvmalloc_lazy_allocation_page(uint64 pgfault_va);
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

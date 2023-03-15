@@ -20,12 +20,16 @@ sparse_memory(char *s)
     printf("sbrk() failed\n");
     exit(1);
   }
+  
   new_end = prev_end + REGION_SZ;
-
   for (i = prev_end + PGSIZE; i < new_end; i += 64 * PGSIZE)
-    *(char **)i = i;
-
+  {
+      *(char **)i = i;
+      if((uint64)(char **)i==0x000000003FFC8000) printf("write ok!");
+  }
+    
   for (i = prev_end + PGSIZE; i < new_end; i += 64 * PGSIZE) {
+    //printf("%p\n",i); 0x000000003FFC4000
     if (*(char **)i != i) {
       printf("failed to read value from memory\n");
       exit(1);
