@@ -15,16 +15,23 @@ initlock(struct spinlock *lk, char *name)
   lk->locked = 0;
   lk->cpu = 0;
 }
-
+// 锁不仅处理相同cpu下不同进程并发的问题
+// 还要处理不同cpu下进程并发的问题
 // Acquire the lock.
 // Loops (spins) until the lock is acquired.
 void
 acquire(struct spinlock *lk)
 {
+  // 为什么会产生死锁
+  // 当一个程序获得锁后出发了中断，那么该程序等待中断的完成
+  // 但是在中断中也需要获得锁来进行操作 那么程序需要中断的完成才能释放锁，而中断需要锁来完成中断
+  // 进而死锁
   push_off(); // disable interrupts to avoid deadlock.
   if(holding(lk))
     panic("acquire");
 
+  // c语言是一条代码可能会转为多条汇编
+  // 汇编之间并发 408 操作系统 进程题目
   // On RISC-V, sync_lock_test_and_set turns into an atomic swap:
   //   a5 = 1
   //   s1 = &lk->locked
@@ -36,8 +43,9 @@ acquire(struct spinlock *lk)
   // past this point, to ensure that the critical section's memory
   // references happen strictly after the lock is acquired.
   // On RISC-V, this emits a fence instruction.
+  // 禁止编译器自作聪明 进行代码重拍
   __sync_synchronize();
-
+  // 记录获得当前锁的cpu
   // Record info about lock acquisition for holding() and debugging.
   lk->cpu = mycpu();
 }

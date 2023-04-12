@@ -15,7 +15,7 @@ extern char trampoline[], uservec[], userret[];
 void kernelvec();
 
 extern int devintr();
-
+//用户寄存器存在trapframe中，内核线程的寄存器存在context中。
 void
 trapinit(void)
 {

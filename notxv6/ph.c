@@ -13,10 +13,11 @@ struct entry {
   int value;
   struct entry *next;
 };
+//头节点
 struct entry *table[NBUCKET];
 int keys[NKEYS];
 int nthread = 1;
-
+pthread_mutex_t lock[NBUCKET];
 double
 now()
 {
@@ -42,10 +43,13 @@ void put(int key, int value)
 
   // is the key already present?
   struct entry *e = 0;
+  pthread_mutex_lock((lock+i));       // acquire lock
+  
   for (e = table[i]; e != 0; e = e->next) {
     if (e->key == key)
       break;
   }
+     
   if(e){
     // update the existing key.
     e->value = value;
@@ -53,6 +57,7 @@ void put(int key, int value)
     // the new is new.
     insert(key, value, &table[i], table[i]);
   }
+  pthread_mutex_unlock((lock+i));
 }
 
 static struct entry*
@@ -114,7 +119,12 @@ main(int argc, char *argv[])
   for (int i = 0; i < NKEYS; i++) {
     keys[i] = random();
   }
-
+  //lock=(pthread_mutex_t *)malloc(sizeof(pthread_mutex_t)*NBUCKET);
+  for (size_t i = 0; i < NBUCKET; i++)
+  {
+    pthread_mutex_init((lock+i), NULL);
+  }
+  
   //
   // first the puts
   //

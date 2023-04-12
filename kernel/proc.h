@@ -1,3 +1,18 @@
+/*
+可以认为每个进程对应着一个内核线程
+这个内核线程包括 uservec -> ... -> swtch
+
+trapframe还是只包含进入和离开内核时的数据。
+context结构体中包含的是在内核线程和调度器线程之间切换时，需要保存和恢复的数据。
+*/
+
+/*
+学生提问：我们这里一直在说线程，但是从我看来XV6的实现中，一个进程就只有一个线程，有没有可能一个进程有多个线程？
+Robert教授：我们这里的用词的确有点让人混淆。在XV6中，一个进程要么在用户空间执行指令，要么是在内核空间执行指令，要么它的状态被保存在context和trapframe中，并且没有执行任何指令。这里该怎么称呼它呢？你可以根据自己的喜好来称呼它，对于我来说，每个进程有两个线程，一个用户空间线程，一个内核空间线程，并且存在限制使得一个进程要么运行在用户空间线程，要么为了执行系统调用或者响应中断而运行在内核空间线程 ，但是永远也不会两者同时运行。
+
+
+*/
+
 // Saved registers for kernel context switches.
 struct context {
   uint64 ra;
@@ -17,7 +32,12 @@ struct context {
   uint64 s10;
   uint64 s11;
 };
+/*
+学生提问：context保存在哪？
+Robert教授：每一个内核线程都有一个context对象。但是内核线程实际上有两类。每一个用户进程有一个对应的内核线程，它的context对象保存在用户进程对应的proc结构体中。
+每一个调度器线程，它也有自己的context对象，但是它却没有对应的进程和proc结构体，所以调度器线程的context对象保存在cpu结构体中。在内核中，有一个cpu结构体的数组，每个cpu结构体对应一个CPU核，每个结构体中都有一个context字段。
 
+*/
 // Per-CPU state.
 struct cpu {
   struct proc *proc;          // The process running on this cpu, or null.
