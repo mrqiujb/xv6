@@ -123,6 +123,7 @@ recover_from_log(void)
 }
 
 // called at the start of each FS system call.
+// 检查是否正在提交 如果正在提交则wait 如果空间不够则wait 不然就执行接下来的代码
 void
 begin_op(void)
 {
@@ -143,6 +144,7 @@ begin_op(void)
 
 // called at the end of each FS system call.
 // commits if this was the last outstanding operation.
+// 提交刚才对于文件的操作
 void
 end_op(void)
 {

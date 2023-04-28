@@ -1,3 +1,11 @@
+/*
+ * @Author: qiujingbao qiujingbao@qq.com
+ * @Date: 2023-04-11 11:26:44
+ * @LastEditors: qiujingbao qiujingbao@qq.com
+ * @LastEditTime: 2023-04-26 17:55:37
+ * @FilePath: /xv6-labs-2020/kernel/fs.h
+ * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+ */
 // On-disk file system format.
 // Both the kernel and user programs use this header file.
 
@@ -23,10 +31,11 @@ struct superblock {
 };
 
 #define FSMAGIC 0x10203040
-
-#define NDIRECT 12
-#define NINDIRECT (BSIZE / sizeof(uint))
-#define MAXFILE (NDIRECT + NINDIRECT)
+//直接块的大小
+#define NDIRECT 11
+#define NINDIRECT (BSIZE / sizeof(uint)) //1024/4=256 一级
+#define SENDIRECT NINDIRECT*NINDIRECT //1024/4=256 二级
+#define MAXFILE (NDIRECT + NINDIRECT+SENDIRECT)
 
 // On-disk inode structure
 struct dinode {
@@ -35,7 +44,7 @@ struct dinode {
   short minor;          // Minor device number (T_DEVICE only)
   short nlink;          // Number of links to inode in file system
   uint size;            // Size of file (bytes)
-  uint addrs[NDIRECT+1];   // Data block addresses
+  uint addrs[NDIRECT+2];   // Data block addresses
 };
 
 // Inodes per block.
@@ -58,3 +67,4 @@ struct dirent {
   char name[DIRSIZ];
 };
 
+#define MAX_CYCLE 10
