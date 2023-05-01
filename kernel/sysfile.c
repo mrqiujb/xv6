@@ -411,20 +411,46 @@ sys_mknod(void)
   end_op();
   return 0;
 }
+
 uint64
 sys_mmap()
 {
   uint64 addr;
   int length, prot, flags, fd, offset;
-  argaddr(0, &addr);
-  argint(1, &length);
-  argint(2, &prot);
-  argint(3, &flags);
-  argint(4, &fd);
-  argint(5, &offset);
-  printf("map %x %d %d %d %d\n", addr, length, prot, flags, fd, offset);
-  return 0;
-  return 0;
+  struct proc *p = myproc();
+
+  if (argaddr(0, &addr) < 0 || argint(1, &length) < 0 || argint(2, &prot) < 0 || argint(3, &flags) < 0 || argint(4, &fd) < 0 || argint(5, &offset) < 0)
+    return -1;
+  struct file *f = p->ofile[fd];
+  // offset addr 肯定是0
+  if (addr != 0x0 || offset != 0)
+    return 0;
+  if ((flags == MAP_SHARED && f->writable == 0 && (prot & PROT_WRITE)))
+    return -1;
+
+  int index = 0;
+  for (; index < NVMAS; index++)
+  {
+    if (p->vmas[index].vm_valid == 0)
+    {
+      p->vmas[index].vm_valid = 1;
+      break;
+    }
+  }
+  if (index == NVMAS)
+    return -1;
+  // copy file
+  p->vmas[index].vm_file = filedup(f);
+  p->vmas[index].vm_fd = fd;
+  // copy flag
+  p->vmas[index].vm_flags = flags;
+  p->vmas[index].vm_prot = prot;
+  // 低地址对齐
+  p->vmas[index].vm_start = PGROUNDDOWN(p->current_addr - length);
+  p->current_addr = PGROUNDDOWN(p->current_addr - length);
+  // 高地址对齐
+  p->vmas[index].vm_end = PGROUNDUP(p->current_addr + length);
+  return p->vmas[index].vm_start;
 }
 uint64
 sys_munmap()
@@ -432,10 +458,42 @@ sys_munmap()
 
   uint64 addr;
   int length;
-  argaddr(0, &addr);
-  argint(1, &length);
-  printf("munmap %x %d \n", addr, length);
-  return 0;
+  if (argaddr(0, &addr) < 0 || argint(1, &length) < 0)
+    return -1;
+  struct proc *p = myproc();
+  int index = 0;
+  for (; index < NVMAS; index++)
+  {
+    // find vma
+    if (addr >= p->vmas[index].vm_start && addr <= p->vmas[index].vm_end)
+    {
+      struct VMA *v = &(p->vmas[index]);
+      int count = PGROUNDUP(length) / PGSIZE;
+      for (int i = 0; i < count; i++) //逐页写回并释放
+      {
+        if (walkaddr(p->pagetable, addr+i*PGSIZE)) // check map is exit
+        {
+          if (v->vm_flags & MAP_SHARED)
+          {
+            filewrite(v->vm_file, addr+i*PGSIZE, PGSIZE); // 回写
+          }
+          uvmunmap(p->pagetable, addr+i*PGSIZE, 1 ,1);
+          v->page_count--;
+        }
+      }
+
+    }
+  }
+  if(index!=NVMAS)
+  {
+    if(p->vmas[index].page_count==0) //所有页面均已释放
+    {
+      p->vmas[index].vm_file->ref--;//减少文件引用
+      p->vmas[index].vm_valid=0;//释放vms
+    }
+  }
+
+  return 1;
 }
 uint64
 sys_chdir(void)

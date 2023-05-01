@@ -452,6 +452,10 @@ stati(struct inode *ip, struct stat *st)
 // Caller must hold ip->lock.
 // If user_dst==1, then dst is a user virtual address;
 // otherwise, dst is a kernel address.
+// inode节点 user_dst =1是用户空间其他是内核空间
+//dst目的地址
+//off是文件偏移地址 没有源地址
+//n是n个byte
 int
 readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
 {

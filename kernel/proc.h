@@ -1,5 +1,7 @@
+#define NVMAS 16
 // Saved registers for kernel context switches.
-struct context {
+struct context
+{
   uint64 ra;
   uint64 sp;
 
@@ -19,11 +21,12 @@ struct context {
 };
 
 // Per-CPU state.
-struct cpu {
-  struct proc *proc;          // The process running on this cpu, or null.
-  struct context context;     // swtch() here to enter scheduler().
-  int noff;                   // Depth of push_off() nesting.
-  int intena;                 // Were interrupts enabled before push_off()?
+struct cpu
+{
+  struct proc *proc;      // The process running on this cpu, or null.
+  struct context context; // swtch() here to enter scheduler().
+  int noff;               // Depth of push_off() nesting.
+  int intena;             // Were interrupts enabled before push_off()?
 };
 
 extern struct cpu cpus[NCPU];
@@ -41,7 +44,8 @@ extern struct cpu cpus[NCPU];
 // the trapframe includes callee-saved user registers like s0-s11 because the
 // return-to-user path via usertrapret() doesn't return through
 // the entire kernel call stack.
-struct trapframe {
+struct trapframe
+{
   /*   0 */ uint64 kernel_satp;   // kernel page table
   /*   8 */ uint64 kernel_sp;     // top of process's kernel stack
   /*  16 */ uint64 kernel_trap;   // usertrap()
@@ -80,19 +84,58 @@ struct trapframe {
   /* 280 */ uint64 t6;
 };
 
-enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+enum procstate
+{
+  UNUSED,
+  SLEEPING,
+  RUNNABLE,
+  RUNNING,
+  ZOMBIE
+};
+
+struct VMA
+{
+  /** 说明VMA是否可用，1为可用，0为已被占用  */
+  int vm_valid;
+  uint64 vm_start;
+  uint64 vm_end;
+  /** Flags  */
+  int vm_flags;
+  /** 页面权限，可写？可读？  */
+  int vm_prot;
+  /** 指向某个文件  */
+  struct file *vm_file;
+  /** 文件描述符  */
+  int vm_fd;
+  int page_count;
+};
 
 // Per-process state
-struct proc {
+struct proc
+{
   struct spinlock lock;
+  // 指针形式更好
+  // 由于xv6内核在内核中没有内存分配器，因此可以声明一个固定大小的vma数组，并根据需要从该数组进行分配。16号的就足够了。
+  // linux使用指针实现
 
+    /*
+        struct mm_struct {
+          struct vm_area_struct *mmap;
+          struct rb_root mm_rb;
+          int map_count;
+          ...
+        }
+    */
+  //仅利用其管理堆区
+  struct VMA vmas[NVMAS];
+  uint64 current_addr;
   // p->lock must be held when using these:
-  enum procstate state;        // Process state
-  struct proc *parent;         // Parent process
-  void *chan;                  // If non-zero, sleeping on chan
-  int killed;                  // If non-zero, have been killed
-  int xstate;                  // Exit status to be returned to parent's wait
-  int pid;                     // Process ID
+  enum procstate state; // Process state
+  struct proc *parent;  // Parent process
+  void *chan;           // If non-zero, sleeping on chan
+  int killed;           // If non-zero, have been killed
+  int xstate;           // Exit status to be returned to parent's wait
+  int pid;              // Process ID
 
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack
