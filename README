@@ -1,45 +1,755 @@
-xv6 is a re-implementation of Dennis Ritchie's and Ken Thompson's Unix
-Version 6 (v6).  xv6 loosely follows the structure and style of v6,
-but is implemented for a modern RISC-V multiprocessor using ANSI C.
+# Lab: locks
 
-ACKNOWLEDGMENTS
+## Memory allocator ([moderate](https://pdos.csail.mit.edu/6.828/2020/labs/guidance.html))
 
-xv6 is inspired by John Lions's Commentary on UNIX 6th Edition (Peer
-to Peer Communications; ISBN: 1-57398-013-7; 1st edition (June 14,
-2000)). See also https://pdos.csail.mit.edu/6.828/, which
-provides pointers to on-line resources for v6.
+The program user/kalloctest stresses xv6's memory allocator: three processes grow and shrink their address spaces, resulting in many calls to `kalloc` and `kfree`. `kalloc` and `kfree` obtain `kmem.lock`. kalloctest prints (as "#fetch-and-add") the number of loop iterations in `acquire` due to attempts to acquire a lock that another core already holds, for the `kmem` lock and a few other locks. The number of loop iterations in `acquire` is a rough measure of lock contention. The output of `kalloctest` looks similar to this before you complete the lab:
 
-The following people have made contributions: Russ Cox (context switching,
-locking), Cliff Frey (MP), Xiao Yu (MP), Nickolai Zeldovich, and Austin
-Clements.
+​	程序`user/kalloctest`对xv6的内存分配器施加压力:三个进程增加和缩小它们的地址空间，导致多次调用`kalloc`和`kfree`。`kalloc `和`kfree`得到`kmem.lock`。`Kalloctest`打印acquire循环迭代的次数由于别的地方已经获得锁，用于`kmem`锁和其他一些锁。`acquire`中的循环迭代次数是锁争用的粗略度量。在你完成实验之前，`kalloctest`的输出看起来类似这样:
 
-We are also grateful for the bug reports and patches contributed by
-Silas Boyd-Wickizer, Anton Burtsev, Dan Cross, Cody Cutler, Mike CAT,
-Tej Chajed, Asami Doi, eyalz800, , Nelson Elhage, Saar Ettinger, Alice
-Ferrazzi, Nathaniel Filardo, Peter Froehlich, Yakir Goaron,Shivam
-Handa, Bryan Henry, jaichenhengjie, Jim Huang, Alexander Kapshuk,
-Anders Kaseorg, kehao95, Wolfgang Keller, Jonathan Kimmitt, Eddie
-Kohler, Austin Liew, Imbar Marinescu, Yandong Mao, Matan Shabtay,
-Hitoshi Mitake, Carmi Merimovich, Mark Morrissey, mtasm, Joel Nider,
-Greg Price, Ayan Shafqat, Eldar Sehayek, Yongming Shen, Fumiya
-Shigemitsu, Takahiro, Cam Tenny, tyfkda, Rafael Ubal, Warren Toomey,
-Stephen Tu, Pablo Ventura, Xi Wang, Keiichi Watanabe, Nicolas
-Wolovick, wxdao, Grant Wu, Jindong Zhang, Icenowy Zheng, and Zou Chang
-Wei.
+```
+$ kalloctest
+start test1
+test1 results:
+--- lock kmem/bcache stats
+lock: kmem: #fetch-and-add 83375 #acquire() 433015
+lock: bcache: #fetch-and-add 0 #acquire() 1260
+--- top 5 contended locks:
+lock: kmem: #fetch-and-add 83375 #acquire() 433015
+lock: proc: #fetch-and-add 23737 #acquire() 130718
+lock: virtio_disk: #fetch-and-add 11159 #acquire() 114
+lock: proc: #fetch-and-add 5937 #acquire() 130786
+lock: proc: #fetch-and-add 4080 #acquire() 130786
+tot= 83375
+test1 FAIL
+```
 
-The code in the files that constitute xv6 is
-Copyright 2006-2020 Frans Kaashoek, Robert Morris, and Russ Cox.
+​	`acquire` maintains, for each lock, the count of calls to `acquire` for that lock, and the number of times the loop in `acquire` tried but failed to set the lock. kalloctest calls a system call that causes the kernel to print those counts for the kmem and bcache locks (which are the focus of this lab) and for the 5 most contended locks. If there is lock contention the number of `acquire` loop iterations will be large. The system call returns the sum of the number of loop iterations for the kmem and bcache locks.
 
-ERROR REPORTS
+​	对于每个锁，`acquire`维护对该锁的`acquire`调用的计数，以及`acquire`中的循环尝试但未能设置锁的次数。`Kalloctest`调用一个系统调用，该调用导致内核打印`kmem`和`bcach`e锁(这是本实验的重点)和5个竞争最激烈的锁的计数。如果存在锁争用，`acquire`循环迭代的次数将会很大。系统调用返回`kmem`和`bcache`锁的循环迭代次数之和。
 
-Please send errors and suggestions to Frans Kaashoek and Robert Morris
-(kaashoek,rtm@mit.edu). The main purpose of xv6 is as a teaching
-operating system for MIT's 6.S081, so we are more interested in
-simplifications and clarifications than new features.
+```c
+// Mutual exclusion lock.
+struct spinlock {
+  uint locked;       // Is the lock held?
 
-BUILDING AND RUNNING XV6
+  // For debugging:
+  char *name;        // Name of lock.
+  struct cpu *cpu;   // The cpu holding the lock.
+#ifdef LAB_LOCK
+  int nts; //计数
+  int n;
+#endif
+};
+```
 
-You will need a RISC-V "newlib" tool chain from
-https://github.com/riscv/riscv-gnu-toolchain, and qemu compiled for
-riscv64-softmmu. Once they are installed, and in your shell
-search path, you can run "make qemu".
+​	For this lab, you must use a dedicated unloaded machine with multiple cores. If you use a machine that is doing other things, the counts that kalloctest prints will be nonsense. You can use a dedicated Athena workstation, or your own laptop, but don't use a dialup machine.
+
+​	对于这个实验室，您必须使用一个专用的多核空载机器。如果您使用的机器正在做其他事情，kalloctest打印的计数将是无意义的。您可以使用专用的Athena工作站或自己的笔记本电脑，但不要使用拨号机。用好点的机器，腾讯云学生机不太行。
+
+​	The root cause of lock contention in kalloctest is that `kalloc()` has a single free list, protected by a single lock. To remove lock contention, you will have to redesign the memory allocator to avoid a single lock and list. The basic idea is to maintain a free list per CPU, each list with its own lock. Allocations and frees on different CPUs can run in parallel, because each CPU will operate on a different list. The main challenge will be to deal with the case in which one CPU's free list is empty, but another CPU's list has free memory; in that case, the one CPU must "steal" part of the other CPU's free list. Stealing may introduce lock contention, but that will hopefully be infrequent.
+
+​	`kalloctest`中锁争用的根本原因是`kalloc() `有一个空闲列表，由一个锁保护。要消除锁争用，必须重新设计内存分配器，以避免单个锁和列表。基本思想是每个CPU维护一个空闲列表，每个列表都有自己的锁。不同CPU上的分配和释放可以并行运行，因为每个CPU将在不同的列表上运行。主要的挑战是处理这样的情况:一个CPU的空闲列表是空的，而另一个CPU的空闲列表有空闲内存;在这种情况下，一个CPU必须“窃取”另一个CPU的空闲列表的一部分。偷窃可能会引入锁争用，但希望这种情况不会经常发生。
+
+​	Your job is to implement per-CPU freelists, and stealing when a CPU's free list is empty. You must give all of your locks names that start with "kmem". That is, you should call `initlock` for each of your locks, and pass a name that starts with "kmem". Run kalloctest to see if your implementation has reduced lock contention. To check that it can still allocate all of memory, run `usertests sbrkmuch`. Your output will look similar to that shown below, with much-reduced contention in total on kmem locks, although the specific numbers will differ. Make sure all tests in `usertests` pass. `make grade` should say that the kalloctests pass.
+
+​	你的工作是实现每个CPU的`freelist`，并在CPU的`freelist`为空时可以窃取其他CPU的块。必须为所有锁命名以`kmem`开头。也就是说，您应该为每个锁调用`initloc`”，并传递一个以`kmem`开头的名称。运行`kalloctest`查看您的实现是否减少了锁争用。要检查它是否仍然可以分配所有内存，请运行`usertests sbrkmuch`。您的输出将类似于下面所示，`kmem`锁上的争用总数大大减少，尽管具体的数字会有所不同。确保“用户测试”中的所有测试都通过。`make grade`应该表示`kalloctests`通过。
+
+```shell
+$ kalloctest
+start test1
+test1 results:
+--- lock kmem/bcache stats
+lock: kmem: #fetch-and-add 0 #acquire() 42843
+lock: kmem: #fetch-and-add 0 #acquire() 198674
+lock: kmem: #fetch-and-add 0 #acquire() 191534
+lock: bcache: #fetch-and-add 0 #acquire() 1242
+--- top 5 contended locks:
+lock: proc: #fetch-and-add 43861 #acquire() 117281
+lock: virtio_disk: #fetch-and-add 5347 #acquire() 114
+lock: proc: #fetch-and-add 4856 #acquire() 117312
+lock: proc: #fetch-and-add 4168 #acquire() 117316
+lock: proc: #fetch-and-add 2797 #acquire() 117266
+tot= 0
+test1 OK
+start test2
+total free number of pages: 32499 (out of 32768)
+.....
+test2 OK
+$ usertests sbrkmuch
+usertests starting
+test sbrkmuch: OK
+ALL TESTS PASSED
+$ usertests
+...
+ALL TESTS PASSED
+$
+```
+
+Some hints: 提示
+
+- You can use the constant `NCPU` from kernel/param.h
+- 你可以使用`NPCU`这个字段来自kernel/param.h
+- Let `freerange` give all free memory to the CPU running `freerange`.
+- 让`freerange`分配所有的空闲内存给CPU
+- The function `cpuid` returns the current core number, but it's only safe to call it and use its result when interrupts are turned off. You should use `push_off()` and `pop_off()` to turn interrupts off and on.
+- `cpuid`返回当前CPU核心编号，但是这只是在关中断的时候使用安全的。你应该使用`push_off()`和 `pop_off()`去关中断。
+- Have a look at the `snprintf` function in kernel/sprintf.c for string formatting ideas. It is OK to just name all locks "kmem" though.
+- 看一下 来自kernel/sprintf.c的`snprintf`函数，此函数去格式化字符串。但是你不使用而是直接命名为 `keme`也是可以的。
+
+
+
+我们先看原本的内存分配策略：
+
+```c
+struct run {
+  struct run *next;
+};
+
+struct {
+  struct spinlock lock;
+  struct run *freelist;
+} kmem;
+
+void
+kinit()
+{
+  initlock(&kmem.lock, "kmem");
+  freerange(end, (void*)PHYSTOP);
+}
+
+void
+freerange(void *pa_start, void *pa_end)
+{
+  char *p;
+  p = (char*)PGROUNDUP((uint64)pa_start);
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+    kfree(p);
+}
+
+// Free the page of physical memory pointed at by pa,
+// which normally should have been returned by a
+// call to kalloc().  (The exception is when
+// initializing the allocator; see kinit above.)
+void
+kfree(void *pa)
+{
+  struct run *r;
+
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("kfree");
+
+  // Fill with junk to catch dangling refs.
+  memset(pa, 1, PGSIZE);
+
+  r = (struct run*)pa;
+
+  acquire(&kmem.lock);
+  r->next = kmem.freelist;
+  kmem.freelist = r;
+  release(&kmem.lock);
+}
+
+// Allocate one 4096-byte page of physical memory.
+// Returns a pointer that the kernel can use.
+// Returns 0 if the memory cannot be allocated.
+void *
+kalloc(void)
+{
+  struct run *r;
+
+  acquire(&kmem.lock);
+  r = kmem.freelist;
+  if(r)
+    kmem.freelist = r->next;
+  release(&kmem.lock);
+
+  if(r)
+    memset((char*)r, 5, PGSIZE); // fill with junk
+  return (void*)r;
+}
+```
+
+​	所有的空闲空间按页划分被`run`这个结构体串成一个链表，这个链表的头指针放在了`kmem`这个结构体中，然后这个结构体被分配了一个锁，无论那个进程想要分配或释放内存都需要获得这把锁。所以无论并发度再高在分配获释放内存的时候，都会先获得锁，这样就近似于单线程。
+
+​	所以实验里面会产生如此大的争用的情况，题目提示可以根据CPU的个数创建不同的`kmem`，并分配锁，分配链表。这样并发度便高了。也就是每个CPU的核都有其专用的`freelist`分配或释放空间的时候都可以在本CPU的`freelist`上完成，这样就增大了并发。但是会带来一个问题，就是如果某个核用完了`freelist`，而其他的核还未用完，此时系统的资源不算用完，所以必须无空闲资源的核去窃取其他有资源的核的资源。
+
+​	我们根据`NCPU`将资源划分`NCPU`等份，然后每一份都配一个锁，在`kinit`中初始化锁，并将建立`NCPU`个链表。这样完成了初始化，然后主要的是`kalloc`和`kfree`，在`kfree`中很简单，根据当前CPU核心数获取id然后获得锁，最后将这片空间重新挂到对应的链表中即可。
+
+​	在`kalloc`中，先根据CPU核心获取id，获取对应的锁，尝试获取一块未分配的空间，如果获取到则返回，如果获取不到则转到`steal_page`函数，此函数遍历所有核心，在尝试读取时获取锁，然后看一下是否够`MAX_NUM_PAGES`页，不够跳到下一个CPU的`kmem`，如果是遇到了当前CPU则直接跳过。
+
+​	此外，锁的名称所在的变量要定义成全局变量，因为锁只保存了这个名称的指针，如果是局部变量则在运行完函数就会被释放，所以定义成全局变量。`snprintf`函数和c的`snprintf`函数用法一样。
+
+```c
+struct run
+{
+  struct run *next;
+};
+
+struct
+{
+  struct spinlock lock;
+  struct run *freelist;
+} kmem[NCPU];
+char name[NCPU][10];
+void kinit()
+{
+  for (int i = 0; i < NCPU; i++)
+  {
+    snprintf(name[i],10,"kmem-%d",i);
+    initlock(&kmem[i].lock,name[i]);
+  }
+  freerange(end, (void *)PHYSTOP);
+}
+// motify justice
+void freerange(void *pa_start, void *pa_end)
+{
+  char *p;
+  p = (char *)PGROUNDUP((uint64)pa_start);
+  int id = 0;
+  struct run *r;
+  for (; p + PGSIZE <= (char *)pa_end; p += PGSIZE)
+  {
+    memset(p, 1, PGSIZE);
+    r = (struct run *)p;
+    acquire(&kmem[id].lock);
+    r->next = kmem[id].freelist;
+    kmem[id].freelist = r;
+    release(&kmem[id].lock);
+    id = (id + 1) % NCPU;
+  }
+}
+void * steal_pages(int cpu)
+{
+  int count = 0;
+  struct run *start = 0;
+  struct run *end = 0;
+  for (int i = 0; i < NCPU; i++)
+  {
+    if (i == cpu)
+      continue;
+
+    acquire(&kmem[i].lock);
+
+    start = kmem[i].freelist;
+    end = kmem[i].freelist;
+    if (!start)
+    {
+      release(&kmem[i].lock);
+      continue;
+    }
+    while (end && count < MAX_NUM_PAGES)
+    {
+      end = end->next;
+      count++;
+    }
+    if (end)
+    {
+      kmem[i].freelist = end->next; // 后面还有空闲内存，freelist接在后面
+      end->next = 0;
+    }
+    else
+      kmem[i].freelist = 0;
+    release(&kmem[i].lock);
+
+    acquire(&kmem[cpu].lock);
+    kmem[cpu].freelist = start->next;
+    release(&kmem[cpu].lock);
+    break;
+  }
+  return (void *)start;
+}
+
+// Free the page of physical memory pointed at by v,
+// which normally should have been returned by a
+// call to kalloc().  (The exception is when
+// initializing the allocator; see kinit above.)
+void kfree(void *pa)
+{
+  struct run *r;
+
+  if (((uint64)pa % PGSIZE) != 0 || (char *)pa < end || (uint64)pa >= PHYSTOP)
+    panic("kfree");
+
+  // Fill with junk to catch dangling refs.
+  memset(pa, 1, PGSIZE);
+
+  r = (struct run *)pa;
+  push_off(); // 关中断
+  int id = cpuid();
+  // 开中断
+
+  acquire(&kmem[id].lock);
+  r->next = kmem[id].freelist;
+  kmem[id].freelist = r;
+  release(&kmem[id].lock);
+  pop_off();
+}
+
+// Allocate one 4096-byte page of physical memory.
+// Returns a pointer that the kernel can use.
+// Returns 0 if the memory cannot be allocated.
+void *
+kalloc(void)
+{
+  struct run *r;
+  push_off();
+  int id = cpuid();
+
+  // 发生中断导致进程切换然后重新调度cpu核发生变化吗？
+
+  acquire(&kmem[id].lock);
+
+  r = kmem[id].freelist;
+  if (r)
+    kmem[id].freelist = r->next;
+  release(&kmem[id].lock);
+  pop_off();
+  if (r == 0)
+    r = steal_pages(id);
+  if (r)
+    memset((char *)r, 5, PGSIZE); // fill with junk
+  return (void *)r;
+}
+
+```
+
+```shell
+//new
+$ kalloctest
+start test1
+test1 results:
+--- lock kmem/bcache stats
+lock: kmem-0: #fetch-and-add 0 #acquire() 90895
+lock: kmem-1: #fetch-and-add 0 #acquire() 155112
+lock: kmem-2: #fetch-and-add 0 #acquire() 166555
+lock: kmem-3: #fetch-and-add 0 #acquire() 4090
+lock: kmem-4: #fetch-and-add 0 #acquire() 4090
+lock: kmem-5: #fetch-and-add 0 #acquire() 4090
+lock: kmem-6: #fetch-and-add 0 #acquire() 4090
+lock: kmem-7: #fetch-and-add 0 #acquire() 4090
+--- top 5 contended locks:
+lock: virtio_disk: #fetch-and-add 98437 #acquire() 1857
+lock: proc: #fetch-and-add 51335 #acquire() 338063
+lock: proc: #fetch-and-add 19175 #acquire() 337974
+lock: proc: #fetch-and-add 18553 #acquire() 337974
+lock: proc: #fetch-and-add 18290 #acquire() 337973
+tot= 0
+test1 OK
+start test2
+total free number of pages: 32495 (out of 32768)
+.....
+test2 OK
+//old
+$ kalloctest
+start test1
+test1 results:
+--- lock kmem/bcache stats
+lock: kmem: #fetch-and-add 40376 #acquire() 433012
+--- top 5 contended locks:
+lock: virtio_disk: #fetch-and-add 124785 #acquire() 1857
+lock: proc: #fetch-and-add 96819 #acquire() 645824
+lock: proc: #fetch-and-add 62652 #acquire() 646177
+lock: proc: #fetch-and-add 45544 #acquire() 646181
+lock: kmem: #fetch-and-add 40376 #acquire() 433012
+tot= 40376
+test1 FAIL
+start test2
+total free number of pages: 32495 (out of 32768)
+.....
+test2 OK
+```
+
+​	可见，对于进程来说，锁的争用次数减少了近一半，对于锁来说，均摊到每个锁上的争用次数略有减小。
+
+## Buffer cache ([hard](https://pdos.csail.mit.edu/6.828/2020/labs/guidance.html))
+
+This half of the assignment is independent from the first half; you can work on this half (and pass the tests) whether or not you have completed the first half.
+
+​	这一半的作业是独立于前一半的;不管你是否完成了前半部分，你都可以完成后半部分(并通过测试)。
+
+If multiple processes use the file system intensively, they will likely contend for `bcache.lock`, which protects the disk block cache in kernel/bio.c. `bcachetest` creates several processes that repeatedly read different files in order to generate contention on `bcache.lock`; its output looks like this (before you complete this lab):
+
+​	如果多个进程密集地使用文件系统，它们可能会争用`bcache.lock`，这个锁用于保护`kernel/bio.c`中的磁盘块缓存。`bcachetest `创建了几个进程，这些进程重复读取不同的文件，以便在`bcache .lock`上产生争用;它的输出看起来像这样(在你完成这个实验之前):
+
+```
+$ bcachetest
+start test0
+test0 results:
+--- lock kmem/bcache stats
+lock: kmem: #fetch-and-add 0 #acquire() 33035
+lock: bcache: #fetch-and-add 16142 #acquire() 65978
+--- top 5 contended locks:
+lock: virtio_disk: #fetch-and-add 162870 #acquire() 1188
+lock: proc: #fetch-and-add 51936 #acquire() 73732
+lock: bcache: #fetch-and-add 16142 #acquire() 65978
+lock: uart: #fetch-and-add 7505 #acquire() 117
+lock: proc: #fetch-and-add 6937 #acquire() 73420
+tot= 16142
+test0: FAIL
+start test1
+test1 OK
+```
+
+You will likely see different output, but the number of `acquire` loop iterations for the `bcache` lock will be high. If you look at the code in `kernel/bio.c`, you'll see that `bcache.lock` protects the list of cached block buffers, the reference count (`b->refcnt`) in each block buffer, and the identities of the cached blocks (`b->dev` and `b->blockno`).
+
+​	您可能会看到不同的输出，但是 `bcache `锁的 `acquire `循环迭代的次数会很高。如果你查看 ` kernel/bio.c `中的代码，你会看到 ` bcache.c `。  `bcache.lock`保护缓存块缓冲区的列表，每个块缓冲区中的引用计数( `b->refcnt  `)，以及缓存块的身份( `b->dev `和 `b->blockno  `)。
+
+
+
+Modify the block cache so that the number of `acquire` loop iterations for all locks in the bcache is close to zero when running `bcachetest`. Ideally the sum of the counts for all locks involved in the block cache should be zero, but it's OK if the sum is less than 500. Modify `bget` and `brelse` so that concurrent lookups and releases for different blocks that are in the bcache are unlikely to conflict on locks (e.g., don't all have to wait for `bcache.lock`). You must maintain the invariant that at most one copy of each block is cached. When you are done, your output should be similar to that shown below (though not identical). Make sure usertests still passes. `make grade` should pass all tests when you are done.
+
+​	修改块缓存，当运行` bcachetest`时，`bcache`中所有锁的`acquire`循环迭代次数接近于零。理想情况下，块缓存中涉及的所有锁的计数之和应该为零，但如果总和小于500也可以。修改`bget`和` brelse `，以便对`bcache`中不同块的并发查找和释放不太可能在锁上发生冲突(例如，不必都等待`bcache.lock`)。您必须维护每个块最多缓存一个副本的不变性。完成后，输出应该与下面所示类似(尽管不完全相同)。确保用户测试仍然通过。`make grade`应该通过所有的测试。
+
+```
+$ bcachetest
+start test0
+test0 results:
+--- lock kmem/bcache stats
+lock: kmem: #fetch-and-add 0 #acquire() 32954
+lock: kmem: #fetch-and-add 0 #acquire() 75
+lock: kmem: #fetch-and-add 0 #acquire() 73
+lock: bcache: #fetch-and-add 0 #acquire() 85
+lock: bcache.bucket: #fetch-and-add 0 #acquire() 4159
+lock: bcache.bucket: #fetch-and-add 0 #acquire() 2118
+lock: bcache.bucket: #fetch-and-add 0 #acquire() 4274
+lock: bcache.bucket: #fetch-and-add 0 #acquire() 4326
+lock: bcache.bucket: #fetch-and-add 0 #acquire() 6334
+lock: bcache.bucket: #fetch-and-add 0 #acquire() 6321
+lock: bcache.bucket: #fetch-and-add 0 #acquire() 6704
+lock: bcache.bucket: #fetch-and-add 0 #acquire() 6696
+lock: bcache.bucket: #fetch-and-add 0 #acquire() 7757
+lock: bcache.bucket: #fetch-and-add 0 #acquire() 6199
+lock: bcache.bucket: #fetch-and-add 0 #acquire() 4136
+lock: bcache.bucket: #fetch-and-add 0 #acquire() 4136
+lock: bcache.bucket: #fetch-and-add 0 #acquire() 2123
+--- top 5 contended locks:
+lock: virtio_disk: #fetch-and-add 158235 #acquire() 1193
+lock: proc: #fetch-and-add 117563 #acquire() 3708493
+lock: proc: #fetch-and-add 65921 #acquire() 3710254
+lock: proc: #fetch-and-add 44090 #acquire() 3708607
+lock: proc: #fetch-and-add 43252 #acquire() 3708521
+tot= 128
+test0: OK
+start test1
+test1 OK
+$ usertests
+  ...
+ALL TESTS PASSED
+$
+```
+
+Please give all of your locks names that start with "bcache". That is, you should call `initlock` for each of your locks, and pass a name that starts with "bcache".
+
+请给所有以 `bcache `开头的锁命名。也就是说，您应该为每个锁调用 `initlock `，并传递一个以 `bcache `开头的名称。
+
+Reducing contention in the block cache is more tricky than for kalloc, because bcache buffers are truly shared among processes (and thus CPUs). For kalloc, one could eliminate most contention by giving each CPU its own allocator; that won't work for the block cache. We suggest you look up block numbers in the cache with a hash table that has a lock per hash bucket.
+
+​	减少块缓存中的争用比`kalloc`更棘手，因为`bcache`缓冲区是真正在进程(以及cpu)之间共享的。对于`kalloc`，可以通过为每个CPU分配自己的分配器来消除大部分争用;这对块缓存不起作用。我们建议您使用每个哈希桶都有一个锁的哈希表在缓存中查找块号。
+
+There are some circumstances in which it's OK if your solution has lock conflicts:
+
+在某些情况下，如果你的解决方案有锁冲突是可以的:
+
+- When two processes concurrently use the same block number. `bcachetest` `test0` doesn't ever do this.
+- 当两个进程同时使用相同的块号时。 `bcachetest  `  ` test0 `不会这样做。
+- When two processes concurrently miss in the cache, and need to find an unused block to replace. `bcachetest` `test0` doesn't ever do this.
+- 当两个进程同时在缓存中丢失时，需要找到一个未使用的块来替换。 `bcachetest ` ` test0  `不会这样做。
+- When two processes concurrently use blocks that conflict in whatever scheme you use to partition the blocks and locks; for example, if two processes use blocks whose block numbers hash to the same slot in a hash table. `bcachetest` `test0` might do this, depending on your design, but you should try to adjust your scheme's details to avoid conflicts (e.g., change the size of your hash table).
+- 当两个进程并发地使用块时，无论你使用什么方案来划分块和锁，都存在冲突;例如，如果两个进程使用的块的块号散列到哈希表中的同一槽。 `bcachetest  ` ` test0  `可能会这样做，这取决于你的设计，但你应该尝试调整你的方案的细节，以避免冲突(例如，改变你的哈希表的大小)。
+
+`bcachetest`'s `test1` uses more distinct blocks than there are buffers, and exercises lots of file system code paths.
+
+ `bcachetest  `的 `test1 `使用的不同块比缓冲区多，并使用了大量的文件系统代码路径。
+
+Here are some hints:
+
+- Read the description of the block cache in the xv6 book (Section 8.1-8.3).
+- 请阅读xv6书中关于块缓存的描述(第8.1-8.3节)。
+- It is OK to use a fixed number of buckets and not resize the hash table dynamically. Use a prime number of buckets (e.g., 13) to reduce the likelihood of hashing conflicts.
+- 可以使用固定数量的桶，而不动态地调整哈希表的大小。使用素数的桶(例如，13)来减少哈希冲突的可能性。
+- Searching in the hash table for a buffer and allocating an entry for that buffer when the buffer is not found must be atomic.
+- 在哈希表中搜索缓冲区并在未找到缓冲区时为该缓冲区分配条目必须是原子的。
+- Remove the list of all buffers (`bcache.head` etc.) and instead time-stamp buffers using the time of their last use (i.e., using `ticks` in kernel/trap.c). With this change `brelse` doesn't need to acquire the bcache lock, and `bget` can select the least-recently used block based on the time-stamps.
+- 删除所有缓冲区的列表( ` bcache `。而不是使用最后一次使用的时间戳缓冲区(即在 `kernel/trap.c `中使用 ` ticks `)。有了这个变化， `brelse `不需要获取 `bcache `锁， ` bget `可以根据时间戳选择最近最少使用的块。
+- It is OK to serialize eviction in `bget` (i.e., the part of `bget` that selects a buffer to re-use when a lookup misses in the cache).
+- 在 ` bget `中序列化evection是可以的(即， `bget `的一部分，当查找在缓存中失败时，选择一个缓冲区来重用)。
+- Your solution might need to hold two locks in some cases; for example, during eviction you may need to hold the bcache lock and a lock per bucket. Make sure you avoid deadlock.
+- 在某些情况下，您的解决方案可能需要持有两个锁;例如，在清除期间，您可能需要持有 `bcache `锁和每个桶的锁。确保避免死锁。
+- When replacing a block, you might move a `struct buf` from one bucket to another bucket, because the new block hashes to a different bucket. You might have a tricky case: the new block might hash to the same bucket as the old block. Make sure you avoid deadlock in that case.
+- 当替换一个块时，你可能会将 `struct buf `从一个桶移动到另一个桶，因为新的块散列到不同的桶。您可能会遇到一个棘手的情况:新块可能与旧块散列到相同的bucket。确保在这种情况下避免死锁。
+- Some debugging tips: implement bucket locks but leave the global bcache.lock acquire/release at the beginning/end of bget to serialize the code. Once you are sure it is correct without race conditions, remove the global locks and deal with concurrency issues. You can also run `make CPUS=1 qemu` to test with one core.
+- 一些调试提示:实现桶锁，但保留全局 `bcache `。在 `bget `的开始/结束锁定获取/释放以序列化代码。一旦您确定它是正确的，没有竞态条件，删除全局锁并处理并发性问题。你也可以运行 `make CPUS=1 qemu `来测试一个核。
+
+​	先看原来的设计思想，根据`xv6book`上所说，这一层是文件系统的缓存层，先声明了这个`bcache`缓存，里面存在了`NBUF`个`buf`，一个`buf`对应一个磁盘块。然后有一个全局的锁，用于控制对cache的读写。然后如果需要读写cache的话并不能直接读写数组而是读写双向链表。双向链表的头被定义为`head`。并在`binit`时初始化，建立好双向链表之后，所有的读写都会通过双向链表的`head`。此层对外暴露的接口是`bwrite`和`bread`，这两个本质上是调用`bget`和`brelse`去获得或释放`cache`，然后通过`virtio_disk_rw`进行数据的同步。
+
+​	`bget`函数根据`blockno`和`dev`号遍历双向链表，如果找到则返回，如果没有找到则找到一个空的`cache`初始化返回，如果没有空的`cache`则`panic`。`brelse`做的是减少引用计数，然后如果引用计数为0则释放这个`cache`。
+
+​	这种算法的特点是无论外部进程并发度再高，在`bio`函数里面都会近似于单线程运行。极大的阻碍了并发。
+
+​	这个实验想让我们实现用`LRU`算法进行调度，并使用`HASH`函数进行映射。就是每一个块都会根据`HASH`函数映射到同一片空间内，例如，`HASH`函数为%13，则无论`blockno`多大，都会映射到`0-12`上，所以建立13个锁，则所有的块都会对应的放到相匹配的锁上，也就是`buket`。然后调度的时候，也就是需要寻找合适的cache用的时候根据`LRU`，也就是找到最久未使用的分配给当前急用的进程。
+
+​	根据上述分析，我们需要改造一下结构体，是每个`buf`都能记住什么时候被使用的然后改造`bcache`结构体，目的是有13个锁，而且需要13个头节点，每个`buf`挂到对应的头上。然后是`init`函数，目的是初始化锁，并且将`buf`挂在对应的链表上，因为没有分配，所以都挂在第一个链表上。然后是`bget`函数，此函数需要根据`blockno`查找对应的链表是否存在这样的`buf`，如果没有则根据`LRU`寻找一块合适的分配给他。
+
+​	这部分，这两位老哥写的很好。
+
+https://blog.csdn.net/weixin_44465434/article/details/111573104
+
+https://blog.csdn.net/RedemptionC/article/details/108351391?spm=1001.2014.3001.5501
+
+还有这个
+
+https://github.com/skyzh/xv6-riscv-fall19/issues/10
+
+​	上述算法，通过将`LRU`判断哪些节点可用，是不是可以在`relase`的时候将引用计数为0的节点单独保存起来，等到下次用的时候再拿取。这样当空闲节点够的时候能避免一次双重for循环。但是这样当空闲`cache`不够的时候，还是避免不了双重for循环，由于锁的增加反而会进一步增大锁的获取次数，进而增加运行时间。
+
+```c
+#define HASH_TABLE_SIZE 13
+#define hash_map(devno) devno % HASH_TABLE_SIZE
+struct
+{
+  struct buf buf[NBUF];
+  struct spinlock buket[HASH_TABLE_SIZE];
+  struct buf head[HASH_TABLE_SIZE];
+  struct buf blank_head;
+  struct spinlock block;
+
+} bcache;
+char name[HASH_TABLE_SIZE][10] = {'\0'};
+void
+binit(void)
+{
+  struct buf *b;
+  initlock(&(bcache.block),"blank_head_lock");
+  for (int i = 0; i < HASH_TABLE_SIZE; i++) {
+    snprintf(name[i], 10, "bcache-%d", i);
+    initlock(&(bcache.buket[i]),name[i]);
+  }
+
+  bcache.blank_head.next=&bcache.buf[0];
+  for (b = bcache.buf; b < bcache.buf+NBUF-1; b++) { 
+    b->next = b+1;
+    initsleeplock(&b->lock, "buffer");
+  }
+  initsleeplock(&b->lock, "buffer");
+}
+//初始化cache
+void init_cache(struct buf * b,uint dev,uint blockno)
+{
+  b->dev = dev;
+  b->blockno = blockno;
+  b->valid = 0;
+  b->refcnt = 1;
+  b->time = ticks;
+}
+// Look through buffer cache for block on device dev.
+// If not found, allocate a buffer.
+// In either case, return locked buffer.
+static struct buf *
+bget(uint dev, uint blockno)
+{
+  int lock_num = hash_map(blockno);
+  struct buf *b;
+
+  acquire(&(bcache.buket[lock_num]));
+  // Is the block already cached?
+  // 如果在这返回说明命中
+  for (b = bcache.head[lock_num].next; b; b = b->next) // 单链表 b不为空
+  {
+    if (b->dev == dev && b->blockno == blockno)
+    {
+      // 更新最近使用时间
+      b->time = ticks;
+      // 更新引用计数
+      b->refcnt++;
+      // release(&bcache.lock);
+      release(&bcache.buket[lock_num]);
+      acquiresleep(&b->lock);
+      return b;
+    }
+  }
+  // 未命中 则需要新的未使用的cache快
+  // 先去空闲cache管理的链表中找一个
+  
+  acquire(&(bcache.block));
+  if (bcache.blank_head.next)
+  {
+    struct buf *take= bcache.blank_head.next;
+    bcache.blank_head.next=take->next;
+
+    //将当前cache 挂到对应的管理链表中
+    struct buf *pre=bcache.head[lock_num].next;//头节点
+    bcache.head[lock_num].next=take;
+    take->next=pre;
+
+    init_cache(take,dev,blockno);
+    
+    release(&(bcache.block));
+    release(&bcache.buket[lock_num]);
+    acquiresleep(&take->lock);
+    return take;
+  }
+
+  // 未命中 且 没有空闲的cache 都在使用
+  // 所以去所有的cache中找到最近未使用
+  // Not cached.
+  // Recycle the least recently used (LRU) unused buffer.
+ 
+  panic("bget: no buffers");
+}
+
+void brelse(struct buf *b)
+{
+  if (!holdingsleep(&b->lock))
+    panic("brelse");
+
+  releasesleep(&b->lock);
+  int lock_num = hash_map(b->blockno);
+
+  acquire(&bcache.buket[lock_num]);
+  b->refcnt--;
+  //printf("brelase block no %d\n",b->blockno);
+  if (b->refcnt == 0)
+  {
+    acquire(&(bcache.block));
+    struct buf *i;
+    struct buf *pre=&bcache.head[lock_num];//头节点
+    for (i = bcache.head[lock_num].next; b!=i; i = i->next)//如果空则头节点直接指向take
+    {
+      pre=i;
+    }
+    pre->next=i->next;
+    //头插入到blank_head
+    pre=bcache.blank_head.next;
+    bcache.blank_head.next=b;
+    b->next=pre;
+
+    release(&(bcache.block));
+  }
+  release(&bcache.buket[lock_num]);
+  // release(&bcache.lock);
+}
+
+void bpin(struct buf *b)
+{
+  int lock_num=hash_map(b->blockno);
+  acquire(&bcache.buket[lock_num]);
+  b->refcnt++;
+  release(&bcache.buket[lock_num]);
+}
+
+void bunpin(struct buf *b)
+{
+  int lock_num=hash_map(b->blockno);
+  acquire(&bcache.buket[lock_num]);
+  b->refcnt--;
+  release(&bcache.buket[lock_num]);
+}
+
+```
+
+​	注意有些时候你的锁设置好名称并不能打印，查看对应的代码，发现所有的锁都被保存在一个指针数组里面，然后打印的时候选择带有`bcache`或`kmem`的打印。
+
+```c
+#define NLOCK 500
+
+static struct spinlock *locks[NLOCK];
+static void findslot(struct spinlock *lk) {
+...
+      locks[i] = lk;
+...
+}
+int statslock(char *buf, int sz) {
+...
+    if(strncmp(locks[i]->name, "bcache", strlen("bcache")) == 0 ||
+       strncmp(locks[i]->name, "kmem", strlen("kmem")) == 0) {
+      tot += locks[i]->nts;
+      n += snprint_lock(buf +n, sz-n, locks[i]);
+    }
+ ...
+}
+```
+
+
+
+```shell
+//空闲保存算法结果
+$ bcachetest
+start test0
+test0 results:
+--- lock kmem/bcache stats
+lock: kmem: #fetch-and-add 0 #acquire() 33032
+lock: bcache-0: #fetch-and-add 0 #acquire() 4116
+lock: bcache-1: #fetch-and-add 0 #acquire() 2110
+lock: bcache-2: #fetch-and-add 0 #acquire() 4280
+lock: bcache-3: #fetch-and-add 0 #acquire() 4328
+lock: bcache-4: #fetch-and-add 0 #acquire() 6330
+lock: bcache-5: #fetch-and-add 0 #acquire() 6318
+lock: bcache-6: #fetch-and-add 0 #acquire() 6746
+lock: bcache-7: #fetch-and-add 0 #acquire() 6720
+lock: bcache-8: #fetch-and-add 0 #acquire() 8468
+lock: bcache-9: #fetch-and-add 0 #acquire() 6176
+lock: bcache-10: #fetch-and-add 0 #acquire() 4118
+lock: bcache-11: #fetch-and-add 0 #acquire() 4118
+lock: bcache-12: #fetch-and-add 0 #acquire() 2108
+lock: bcache-blank: #fetch-and-add 41799 #acquire() 65094
+--- top 5 contended locks:
+lock: proc: #fetch-and-add 1370176 #acquire() 447386
+lock: proc: #fetch-and-add 1185463 #acquire() 449081
+lock: proc: #fetch-and-add 1178517 #acquire() 449190
+lock: proc: #fetch-and-add 796834 #acquire() 436287
+lock: proc: #fetch-and-add 659228 #acquire() 434769
+tot= 41799
+test0: FAIL
+start test1
+test1 OK
+$ 
+//LRU算法结果
+$ bcachetest
+start test0
+test0 results:
+--- lock kmem/bcache stats
+lock: kmem: #fetch-and-add 0 #acquire() 33033
+lock: bcache-0: #fetch-and-add 0 #acquire() 4135
+lock: bcache-1: #fetch-and-add 0 #acquire() 2128
+lock: bcache-2: #fetch-and-add 0 #acquire() 4297
+lock: bcache-3: #fetch-and-add 0 #acquire() 4345
+lock: bcache-4: #fetch-and-add 0 #acquire() 6347
+lock: bcache-5: #fetch-and-add 0 #acquire() 6335
+lock: bcache-6: #fetch-and-add 0 #acquire() 6762
+lock: bcache-7: #fetch-and-add 0 #acquire() 6737
+lock: bcache-8: #fetch-and-add 0 #acquire() 8486
+lock: bcache-9: #fetch-and-add 0 #acquire() 6194
+lock: bcache-10: #fetch-and-add 0 #acquire() 4136
+lock: bcache-11: #fetch-and-add 0 #acquire() 4136
+lock: bcache-12: #fetch-and-add 0 #acquire() 2126
+--- top 5 contended locks:
+lock: proc: #fetch-and-add 143365 #acquire() 79801
+lock: virtio_disk: #fetch-and-add 136247 #acquire() 1262
+lock: proc: #fetch-and-add 83559 #acquire() 79431
+lock: proc: #fetch-and-add 65606 #acquire() 79468
+lock: proc: #fetch-and-add 60400 #acquire() 79431
+tot= 0
+test0: OK
+start test1
+test1 OK
+//未修改结果
+$ bcachetest
+start test0
+test0 results:
+--- lock kmem/bcache stats
+lock: kmem: #fetch-and-add 0 #acquire() 33036
+lock: bcache: #fetch-and-add 38287 #acquire() 65936
+--- top 5 contended locks:
+lock: proc: #fetch-and-add 149653 #acquire() 80621
+lock: virtio_disk: #fetch-and-add 145107 #acquire() 1184
+lock: proc: #fetch-and-add 50852 #acquire() 80313
+lock: proc: #fetch-and-add 48777 #acquire() 80303
+lock: proc: #fetch-and-add 45600 #acquire() 80312
+tot= 38287
+test0: FAIL
+start test1
+test1 OK
+$ 
+```
+
+从结果看来，将所有空白的cache单独保存在一个头节点之下，固然能省一些算法运行的时间，但是由于当多个进程都没有空闲的cache时都需要获得相同锁才能拿到空白的cache，所以导致空白节点的访问次数大大增加以至于不能通过测试。
