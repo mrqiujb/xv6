@@ -43,3 +43,830 @@ You will need a RISC-V "newlib" tool chain from
 https://github.com/riscv/riscv-gnu-toolchain, and qemu compiled for
 riscv64-softmmu. Once they are installed, and in your shell
 search path, you can run "make qemu".
+1.启动xv6在上个md文件已经写过了
+
+2.如何提交以及评分也写过了
+
+3.准备工作
+
+​	实现sleep函数在xv6上，功能和unix的sleep一样，然后这个函数的参数是用户指定的一个数，这个数的单位是xv6内核提供的，是计时器两次中断的时间差值。然后这个函数被定义在user/sleep.c里面。
+
+​	我们先不着急编写代码，先去目录下看看有什么，如何在vscode远程打开服务器文件请看上一章。
+
+
+
+![截屏2022-10-25 09.48.15-6663486](.\pics\截屏2022-10-25 09.48.15-6663486.png)
+
+​	文件看起来很乱，因为编译生成了一堆中间文件编译结果，所以先清理一下,使用make clean 额结果还是很乱
+
+![截屏2022-10-25 09.50.46-6663472](.\pics\截屏2022-10-25 09.50.46-6663472.png)
+
+​	带有out的先不管，应该是生成文件，LICENSE是版权声明，Makefile是cmake编译的配置文件，gradelib.py应该是执行make grade的脚本文件，也就是评分文件，先不用管。4个文件夹，conf应该是配置
+
+
+
+![截屏2022-10-25 09.52.50](.\pics\截屏2022-10-25 09.52.50.png)
+
+​	kernel是内核文件，现在也应该用不到
+
+
+
+![截屏2022-10-25 09.53.25](.\pics\截屏2022-10-25 09.53.25.png)
+
+​	mkfs文件夹，查了一下这个命令在linux上是，*mkfs*(英文全拼:make file system)命令用于在特定的分区上建立 linux 文件系统。同时观察到main函数也在里面，或许系统便是从这开始启动的。
+
+
+
+![截屏2022-10-25 09.55.45](.\pics\截屏2022-10-25 09.55.45.png)
+
+​	最后一个文件夹便是user，也是本次实验的目标文件夹。我们要在里面实现sleep函数，然后发现没有sleep.c这个文件，结合user.h重的声明与文件夹的函数定义来看。应该是自己定义一个sllep文件，并实现user.h的声明。
+
+
+
+![截屏2022-10-25 10.03.38](.\pics\截屏2022-10-25 10.03.38.png)
+
+4.实现sleep
+
+- Before you start coding, read Chapter 1 of the [xv6 book](https://pdos.csail.mit.edu/6.828/2020/xv6/book-riscv-rev1.pdf).
+
+- Look at some of the other programs in `user/` (e.g., `user/echo.c`, `user/grep.c`, and `user/rm.c`) to see how you can obtain the command-line arguments passed to a program.
+
+- If the user forgets to pass an argument, sleep should print an error message.
+
+- The command-line argument is passed as a string; you can convert it to an integer using `atoi` (see user/ulib.c).
+
+- Use the system call `sleep`.
+
+- See `kernel/sysproc.c` for the xv6 kernel code that implements the `sleep` system call (look for `sys_sleep`), `user/user.h` for the C definition of `sleep` callable from a user program, and `user/usys.S` for the assembler code that jumps from user code into the kernel for `sleep`.
+
+- Make sure `main` calls `exit()` in order to exit your program.
+
+- Add your `sleep` program to `UPROGS` in Makefile; once you've done that, `make qemu` will compile your program and you'll be able to run it from the xv6 shell.
+
+- Look at Kernighan and Ritchie's book *The C programming language (second edition)* (K&R) to learn about C.
+
+  官方给了我们一些建议，
+
+  1.做之前读xv6的第一章https://pdos.csail.mit.edu/6.828/2020/xv6/book-riscv-rev1.pdf
+
+  2.看一下其他函数怎么实现的，怎么读取命令行参数
+
+  3.如果没有参数，我们实现的sleep应该报错
+
+  4.如果是参数是string，应该使用user/ulib.c的atoi函数转为数字
+
+  5.使用系统调用在kernel/sysproc.c文件里面的sys_sleep函数。然后是.s文件是用户代码向系统调用跳转的桥梁
+
+  6.确保exit()能够离开程序
+
+  7.将写的sleep.c添加到makefile里面确保被编译
+
+  8.多读读c语言看看咋写
+
+```c
+// system calls
+int sleep(int n) Pause for n clock ticks. //使用这个系统调用
+```
+
+然后观察sys_sleep函数
+
+```c
+uint64 sys_sleep(void) // /kernel/sysproc.c
+{
+  int n;
+  uint ticks0;
+  if(argint(0, &n) < 0)
+    return -1;
+  acquire(&tickslock);
+  ticks0 = ticks;
+  while(ticks - ticks0 < n){
+    if(myproc()->killed){
+      release(&tickslock);
+      return -1;
+    }
+    sleep(&ticks, &tickslock);
+  }
+  release(&tickslock);
+  return 0;
+}
+int atoi(const char *s) // path: /user/ulib.c
+{
+  int n;
+
+  n = 0;
+  while('0' <= *s && *s <= '9')
+    n = n*10 + *s++ - '0';
+  return n;
+}
+//kill.c 看看人家咋写的
+int main(int argc, char **argv)
+{
+  int i;
+
+  if(argc < 2){
+    fprintf(2, "usage: kill pid...\n");
+    exit(1);
+  }
+  for(i=1; i<argc; i++)
+    kill(atoi(argv[i]));
+  exit(0);
+}
+int atoi(const char *s)
+{
+  int n;
+
+  n = 0;
+  while('0' <= *s && *s <= '9')
+    n = n*10 + *s++ - '0';
+  return n;
+}
+```
+
+argc 是参数的个数，argv是参数的数组。例如 sleep 7 则argc等于2 然后argv[0]=sleep argue[1]=7
+
+atoi函数会把字符转为数字，如果是非数字字符则返回一个0，不满足条件跳出while循环，n被赋初值0.
+
+然后代码如下
+
+```c
+#include "kernel/types.h"
+#include "kernel/stat.h"
+#include "user/user.h"
+
+int main(int argc, char **argv)
+{
+    int ticks;
+    if(argc!=2 || argv[1]==0)
+    {
+        fprintf(2, "usage: args is error\n");
+        exit(1);
+    }
+    ticks=atoi(argv[1]);
+    sleep(ticks);
+    exit(0);
+}
+```
+
+注意：include的顺序，我怀疑他gcc版本太低，导致include顺序不对会链接失败！！！例如
+
+```c
+#include "kernel/stat.h"
+#include "user/user.h"
+#include "kernel/types.h"
+//按如上顺序编译连接会出现如下错误
+In file included from user/sleep.c:1:
+./kernel/stat.h:7:3: error: unknown type name ‘uint’
+    7 |   uint ino;    // Inode number
+      |   ^~~~
+./kernel/stat.h:10:3: error: unknown type name ‘uint64’
+   10 |   uint64 size; // Size of file in bytes
+      |   ^~~~~~
+In file included from user/sleep.c:2:
+./user/user.h:36:1: error: unknown type name ‘uint’; did you mean ‘int’?
+   36 | uint strlen(const char*);
+      | ^~~~
+      | int
+./user/user.h:37:26: error: unknown type name ‘uint’; did you mean ‘int’?
+   37 | void* memset(void*, int, uint);
+      |                          ^~~~
+      |                          int
+./user/user.h:38:1: error: parameter names (without types) in function declaration [-Werror]
+   38 | void* malloc(uint);
+      | ^~~~
+./user/user.h:41:40: error: unknown type name ‘uint’; did you mean ‘int’?
+   41 | int memcmp(const void *, const void *, uint);
+      |                                        ^~~~
+      |                                        int
+./user/user.h:42:36: error: unknown type name ‘uint’; did you mean ‘int’?
+   42 | void *memcpy(void *, const void *, uint);
+      |                                    ^~~~
+      |                                    int
+cc1: all warnings being treated as errors
+  
+```
+
+​	个人认为因为 uint的定义在types.c定义 而user.c使用了types.c的定义，所以应该先链接types.c再链接user,c。然后因为stat.h使用了types.c的定义的东西所以应该先引用types.c 然后引用 stat.c 最后引用user.h 不知道理解正确不正确。当然如果直接抄其他函数的定义应该就遇不到这个错误了。现在编码几乎没遇到过这种问题。咔咔一堆引用就完事了。因为我印象里面老的c语言版本好像是只能在开头定义变量，然后实验了一下在任何地方都能定义变量。应该不是老版c语言规则。
+
+编写完函数别忘了在makefile里面添加上去，要不然cmake是不会识别的。
+
+```makefile
+UPROGS=\
+	$U/_cat\
+	$U/_echo\
+	$U/_forktest\
+	$U/_grep\
+	$U/_init\
+	$U/_kill\
+	$U/_ln\
+	$U/_ls\
+	$U/_mkdir\
+	$U/_rm\
+	$U/_sh\
+	$U/_stressfs\
+	$U/_usertests\
+	$U/_grind\
+	$U/_wc\
+	$U/_zombie\
+	$U/_sleep\
+
+```
+
+然后启动xv6，输入ls命令可以看到我们写的sleep命令了就
+
+![截屏2022-10-25 19.45.36](.\pics\截屏2022-10-25 19.45.36.png)
+
+最后测一下我们写的代码能不能通过测试
+
+方式一
+
+```shell
+make GRADEFLAGS=sleep grade
+make[1]: Leaving directory '/home/ubuntu/xv6-labs-2020'
+== Test sleep, no arguments == sleep, no arguments: OK (2.9s) 
+== Test sleep, returns == sleep, returns: OK (0.6s) 
+== Test sleep, makes syscall == sleep, makes syscall: OK (0.9s) 
+```
+
+方式二
+
+```shell
+./grade-lab-util sleep
+make: 'kernel/kernel' is up to date.
+== Test sleep, no arguments == sleep, no arguments: OK (0.7s) 
+== Test sleep, returns == sleep, returns: OK (1.2s) 
+== Test sleep, makes syscall == sleep, makes syscall: OK (0.9s) 
+```
+
+方式三
+
+```shell
+make grade
+== Test sleep, no arguments == 
+$ make qemu-gdb
+sleep, no arguments: OK (2.5s) 
+== Test sleep, returns == 
+$ make qemu-gdb
+sleep, returns: OK (0.8s) 
+== Test sleep, makes syscall == 
+$ make qemu-gdb
+sleep, makes syscall: OK (0.8s) 
+== Test pingpong == 
+$ make qemu-gdb
+pingpong: FAIL (1.2s) 
+    ...
+         $ pingpong
+         exec pingpong failed
+         $ echo OK
+    GOOD OK
+         $ qemu-system-riscv64: terminating on signal 15 from pid 214185 (make)
+    MISSING '^\d+: received ping$'
+    MISSING '^\d+: received pong$'
+    QEMU output saved to xv6.out.pingpong
+== Test primes == 
+$ make qemu-gdb
+primes: FAIL (0.9s) 
+    ...
+         $ primes
+         exec primes failed
+         $ echo OK
+    GOOD OK
+         $ qemu-system-riscv64: terminating on signal 15 from pid 214218 (make)
+    MISSING 'prime 2'
+    MISSING 'prime 3'
+    MISSING 'prime 5'
+    MISSING 'prime 7'
+    MISSING 'prime 11'
+    MISSING 'prime 13'
+    MISSING 'prime 17'
+    MISSING 'prime 19'
+    MISSING 'prime 23'
+    MISSING 'prime 29'
+    MISSING 'prime 31'
+    QEMU output saved to xv6.out.primes
+== Test find, in current directory == 
+```
+
+## pingpong
+
+​	编写一个pingpong程序，和sleep一样位于user/pingpong.c。功能是fork一个子进程，然后可以双向传输数据。当子进程收到父进程传输的数据的时候应该输出如下格式：“<pid>: received ping” pid是该进程的pid。然后给父进程发送数据后结束本身。父进程收到数据后应该输出如下格式：“<pid>: received pong”，下面是给的提示。
+
+- Use `pipe` to create a pipe. 使用pipe创建管道
+- Use `fork` to create a child. 使用fork创建子进程
+- Use `read` to read from the pipe, and `write` to write to the pipe. 用read读出管道数据，用write写数据向管道
+- Use `getpid` to find the process ID of the calling process. 用find找到所属pid
+- Add the program to `UPROGS` in Makefile. 将文件添加到makefile
+- User programs on xv6 have a limited set of library functions available to them. You can see the list in `user/user.h`; the source (other than for system calls) is in `user/ulib.c`, `user/printf.c`, and `user/umalloc.c`. 只能使用xv6提供的函数，可以在user.h和剩下的文件里面找到。
+
+```c
+int write(int fd, char *buf, int n) Write n bytes from buf to file descriptor fd; returns n.
+int read(int fd, char *buf, int n) Read n bytes into buf; returns number read; or 0 if end of file.
+int close(int fd) Release open file fd.
+int pipe(int p[]) Create a pipe, put read/write file descriptors in p[0] and p[1].
+```
+
+一开始没搞清楚close在pipe上的用法，写完就关闭写端导致无法继续写入报错。读完关闭读端导致读失败。因为父进程和子进程共用一个pipe所以不用关闭但要分时使用pipe，或者创建两个pipe将半双工改造成全双工。**注意一定要用sleep岔开子进程与父进程的运行，printf或者fprintf是可以被中断的，会一起打印一些东西**
+
+```c
+#include "kernel/types.h"
+#include "kernel/stat.h"
+#include "user/user.h"
+int main(int argc, char **argv)
+{
+    //no use args
+    if(argc!=1)
+    {
+        fprintf(2, "usage: args is error\n");
+        exit(1);
+    }
+    int p_c_fd[2]; //fd[0] --read fd[1] --write
+    int c_p_fd[2]; //fd[0] --read fd[1] --write
+    if(pipe(p_c_fd)!=0 || pipe(c_p_fd)!=0)
+    {
+        fprintf(2, "usage: create pipe faild!\n");
+        exit(1);
+    }
+    int pid=fork();
+    if(pid<0) //创建失败
+    {
+        fprintf(2, "usage: create process faild!\n");
+        exit(1);
+    } 
+    else if(pid==0) //子进程
+    {
+        sleep(10);
+        char buf[255];
+        char *msg="pong";
+
+        if(read(p_c_fd[0], buf, sizeof(buf))==-1)
+        {
+            fprintf(2, "%d: read faild!\n",getpid());
+            exit(1);
+        }
+        printf("%d: received ping\n",getpid());
+
+        if(write(c_p_fd[1], msg, strlen(msg))==-1)
+        {
+            fprintf(2, "%d: write faild!\n",getpid());
+            exit(1);
+        }
+        exit(0);
+    }
+    else //父进程
+    {
+        char buf[255];
+        char *msg="ping";
+        if(write(p_c_fd[1], msg, strlen(msg))==-1)
+        {
+            fprintf(2, "%d: write faild!\n",getpid());
+            exit(1);
+        }
+        
+        sleep(30);
+        if(read(c_p_fd[0], buf, sizeof(buf))==-1)
+        {
+            fprintf(2, "%d: read faild!\n",getpid());
+            exit(1);
+        }
+        printf("%d: received pong\n",getpid());
+        exit(0);
+    }
+    exit(0);
+}
+```
+
+## 2.4 管道读写规则[#](https://www.cnblogs.com/Grong/p/15630119.html#24-管道读写规则)
+
+用阻塞的方式打开管道（即默认情况下）
+
+1. 如果**所有管道写端对应的文件描述符被关闭**（管道写端引用计数为 0），读端在将管道中剩余数据读取后，再次**read会返回0**。（写端关闭）
+2. 如果**有指向管道写端的文件描述符没关闭**，且持有管道**写端的进程也没有向管道中写数据**，这时有进程从管道读端读数据，那么管道中剩余的数据都被读取后，再次 **read 会阻塞**。（读完不写）
+3. 如果**所有指向管道读端的文件描述符都关闭了**（管道读端引用计数为 0），进行write操作会产生信号SIGPIPE,进而可能导致write进程退出。（读端关闭）
+4. 如果**有指向管道读端的文件描述符没关闭**（管道读端引用计数大于 0），且**读端进程并没有向管道中读进程**，则当写端进程写满后，会进入阻塞。（写满不读）
+
+## 2.5 管道的特点[#](https://www.cnblogs.com/Grong/p/15630119.html#25-管道的特点)
+
+- 只能用于具有共同祖先的进程（具有亲缘关系的进程）之间进行通信。
+
+- 管道提供流式服务。
+
+- 管道的生命周期随进程，进程退出，管道释放。
+
+- 内核会对管道操作进行同步与互斥。
+
+- 管道是半双工的，数据只能向一个方向流动；需要双方通信时，需要建立起两个管道
+
+- 管道大小为65536 byte
+
+  如果不关闭读写端而采用分时的形式去读写也可以完成，因为半双工的意识是能双向传递但是不能同时
+
+```c
+#include "kernel/types.h"
+#include "kernel/stat.h"
+#include "user/user.h"
+int main(int argc, char **argv)
+{
+    //no use args
+    if(argc!=1)
+    {
+        fprintf(2, "usage: args is error\n");
+        exit(1);
+    }
+    int fd[2]; //fd[0] --read fd[1] --write
+    if(pipe(fd)!=0)
+    {
+        fprintf(2, "usage: create pipe faild!\n");
+        exit(1);
+    }
+    int pid=fork();
+    if(pid<0) //创建失败
+    {
+        fprintf(2, "usage: create process faild!\n");
+        exit(1);
+    } 
+    else if(pid==0) //子进程
+    {
+        sleep(5);
+        char buf[255];
+        char *msg="pong";
+
+        if(read(fd[0], buf, sizeof(buf))==-1)
+        {
+            fprintf(2, "%d: read faild!\n",getpid());
+            exit(1);
+        }
+        close(fd[0]);
+
+        printf("%d: received ping\n",getpid());
+
+        if(write(fd[1], msg, strlen(msg))==-1)
+        {
+            fprintf(2, "%d: write faild!\n",getpid());
+            exit(1);
+        }
+        close(fd[1]);
+        exit(0);
+    }
+    else //父进程
+    {
+        char buf[255];
+        char *msg="ping";
+        if(write(fd[1], msg, strlen(msg))==-1)
+        {
+            fprintf(2, "%d: write faild!\n",getpid());
+            exit(1);
+        }
+        close(fd[1]);
+        
+        sleep(30);
+        if(read(fd[0], buf, sizeof(buf))==-1)
+        {
+            fprintf(2, "%d: read faild!\n",getpid());
+            exit(1);
+        }
+        close(fd[0]);
+        printf("%d: received pong\n",getpid());
+        exit(0);
+    }
+    exit(0);
+}
+```
+
+评分
+
+```shell
+make GRADEFLAGS=pingpong grade
+make[1]: Leaving directory '/home/ubuntu/xv6-labs-2020'
+== Test pingpong == make GRADEFLAGS=pingpong gradepingpong: OK (6.2s) 
+```
+
+primes
+
+```c
+#include <unistd.h>
+
+int dup(int fd); //int dup(int fd) Return a new file descriptor referring to the same file as fd.
+int wait(int *status); //Wait for a child to exit; exit status in *status; returns child PID.
+
+```
+
+```c
+#include "kernel/types.h"
+#include "user/user.h"
+#include "stddef.h"
+
+void primes(int readfd,int writefd)
+{
+    int prenum,nextnum;
+    if(read(readfd,&prenum,sizeof(int)))
+    {
+        printf("%d prime %d\n",getpid(),prenum);
+        int pid=fork();
+        if(pid==0)
+        {
+          //傻逼了 光想节省资源，使用一个管道
+          //这段代码会导致一边读一边写死循环的节奏！！！
+              while(read(readfd,&nextnum,sizeof(int)))
+            {
+              fprintf(2, "%d: read %d!\n",getpid(),nextnum);
+              if(nextnum%prenum!=0)
+              {
+                  if(write(writefd,&nextnum,sizeof(int))==-1)
+                  {
+                    fprintf(2, "%d: write faild!\n",getpid());
+                    exit(1);
+                  }
+              }
+            }
+            close(readfd);
+            close(writefd);
+            exit(0);
+        }
+        else if(pid>0)
+        {
+            wait(NULL);
+            //printf("pid :%d write ok\n",getpid());
+            primes(readfd,writefd);
+        }
+        else
+        {
+          fprintf(2, "usage: fork is error\n");
+          exit(1);
+        }
+    }
+    else
+    {
+      fprintf(2, "usage: read pipe is error\n");
+      exit(1);
+    }
+}
+
+// 创建一个进程为主进程 创建一个子进程将2-35写入管道，然后递归判断
+//先输出第一个元素，然后将n的倍数的元素写入另外一个管道递归执行直到为空
+int main(int argc, char **argv)
+{
+    int fd[2];
+    if(pipe(fd)!=0) //经过pipe函数后，fd存的是两个数，拿到这两个数就能对管道读写
+    {
+      fprintf(2, "usage: create pipe is error\n");
+      exit(1);
+    }
+    int pid=fork();
+    if(pid==0)    //子进程
+    {
+        for(int i=2;i<36;i++)
+        {
+          write(fd[1],&i,sizeof(int));//guide说用数字比acsii码好使，然后xv6 book上是char *buf。所以对i取地址
+        }
+        exit(0);
+    }
+    else if(pid>0) //父进程
+    {
+        wait(NULL);//Wait for a child to exit; exit status in *status; returns child PID.
+        //数据已经全部写入管道了
+        //guide上的意思应该是对管道复用否则系统资源不够分配
+        //当进程没有结束的时候管道应该是不会被释放的
+        fprintf(2, "pid %d: write ok!\n",getpid());
+        primes(fd[0],fd[1]);
+    }
+    else
+    {
+      fprintf(2, "usage: fork is error\n");
+      exit(1);
+    }
+    return 0;
+}
+
+
+```
+
+```c
+#include "kernel/types.h"
+#include "user/user.h"
+#include "stddef.h"
+
+void primes(int readfd,int writefd)
+{
+    int prenum,nextnum;
+    if(read(readfd,&prenum,sizeof(int)))
+    {
+        if(prenum==-1) return;
+        printf("prime %d\n",prenum);
+        int pid=fork();
+        if(pid==0)
+        {
+          //傻逼了 光想节省资源使用一个管道
+          //这段代码会导致一边读一边写死循环的节奏！！！
+              while(read(readfd,&nextnum,sizeof(int)))
+            {
+              if(nextnum==-1) break;
+              if(nextnum%prenum!=0)
+              {
+                  if(write(writefd,&nextnum,sizeof(int))==-1)
+                  {
+                    fprintf(2, "%d: write faild!\n",getpid());
+                    exit(1);
+                  }
+              }
+            }
+            int end_flag=-1;
+            if(write(writefd,&end_flag,sizeof(int)))
+            {
+              fprintf(2, "usage: wirte pipe is error\n");
+              exit(1);
+            }
+            close(readfd);
+            close(writefd);
+            exit(0);
+        }
+        else if(pid>0)
+        {
+            wait(NULL);
+            //printf("pid :%d write ok\n",getpid());
+            primes(readfd,writefd);
+        }
+        else
+        {
+          fprintf(2, "usage: fork is error\n");
+          exit(1);
+        }
+    }
+    else
+    {
+      fprintf(2, "usage: read pipe is error\n");
+      exit(1);
+    }
+    return;
+}
+
+// 创建一个进程为主进程 创建一个子进程将2-35写入管道，然后递归判断
+//先输出第一个元素，然后将n的倍数的元素写入另外一个管道递归执行直到为空
+int main(int argc, char **argv)
+{
+    int fd[2];
+    if(pipe(fd)!=0) //经过pipe函数后，fd存的是两个数，拿到这两个数就能对管道读写
+    {
+      fprintf(2, "usage: create pipe is error\n");
+      exit(1);
+    }
+    int pid=fork();
+    if(pid==0)    //子进程
+    {
+        for(int i=2;i<36;i++)
+        {
+          //guide说用数字比acsii码好使，然后xv6 book上是char *buf。所以对i取地址
+          if(write(fd[1],&i,sizeof(int))==-1)
+          {
+            fprintf(2, "usage: wirte pipe is error\n");
+            exit(1);
+          }
+        }
+        //标识符，因为只使用一个pipe需要区分一个那一次读写
+        int end_flag=-1;
+        if(write(fd[1],&end_flag,sizeof(int)))
+        {
+            fprintf(2, "usage: wirte pipe is error\n");
+            exit(1);
+        }
+        exit(0);
+        //执行完成结束占用
+    }
+    else if(pid>0) //父进程
+    {
+        wait(NULL);//Wait for a child to exit; exit status in *status; returns child PID.
+        //数据已经全部写入管道了
+        //guide上的意思应该是对管道复用否则系统资源不够分配
+        //当进程没有结束的时候管道应该是不会被释放的
+        fprintf(2, "pid %d: write ok!\n",getpid());
+        primes(fd[0],fd[1]);
+        exit(0);
+    }
+    else
+    {
+      fprintf(2, "usage: fork is error\n");
+      exit(1);
+    }
+    return 0;
+}
+
+
+```
+
+```c
+make GRADEFLAGS=primes grade
+make[1]: Leaving directory '/home/ubuntu/xv6-labs-2020'
+== Test primes == primes: OK (3.2s) 
+```
+
+​	测试成功！调用primes的是主进程会一直存在，子进程完成读出-判断-写入后便会exit，调用primes的时候第一个元素就是素数。因为只使用一个管道，所以需要标识符来判断是不是本次primes的。然后文件表示符，说白了就是个int数字，跟id一样，所以当作参数传入。每次结束后需要exit结束占用，后边的进程才能正常读写。
+
+## find ([moderate](https://pdos.csail.mit.edu/6.828/2020/labs/guidance.html))
+
+Write a simple version of the UNIX find program: find all the files in a directory tree with a specific name. Your solution should be in the file `user/find.c`.
+
+Some hints:
+
+- Look at user/ls.c to see how to read directories.
+
+- Use recursion to allow find to descend into sub-directories.
+
+- Don't recurse into "." and "..".
+
+- Changes to the file system persist across runs of qemu; to get a clean file system run make clean and then make qemu.
+
+- You'll need to use C strings. Have a look at K&R (the C book), for example Section 5.5.
+
+- Note that == does not compare strings like in Python. Use strcmp() instead.
+
+- Add the program to `UPROGS` in Makefile.
+
+  Your solution is correct if produces the following output (when the file system contains the files `b` and `a/b`):
+
+  ```shell
+      $ make qemu
+      ...
+      init: starting sh
+      $ echo > b
+      $ mkdir a
+      $ echo > a/b
+      $ find . b
+      ./b
+      ./a/b
+      $ 
+  ```
+
+先看ls.c的东西
+
+```c
+void ls(char *path)
+{
+  char buf[512], *p;
+  int fd;
+  struct dirent de;
+  struct stat st;
+
+  if((fd = open(path, 0)) < 0){ //打开指定路径的文件/文件夹 fd文件描符
+    fprintf(2, "ls: cannot open %s\n", path);
+    return;
+  }
+/*
+#define T_DIR     1   // Directory
+#define T_FILE    2   // File
+#define T_DEVICE  3   // Device
+struct stat {
+  int dev;     // File system's disk device
+  uint ino;    // Inode number
+  short type;  // Type of file
+  short nlink; // Number of links to file
+  uint64 size; // Size of file in bytes
+};
+*/
+  if(fstat(fd, &st) < 0){ //根据文件描述符找到文件的描述状态 然后复制到st里面 
+    fprintf(2, "ls: cannot stat %s\n", path);
+    close(fd);
+    return;
+  }
+
+  switch(st.type){ //根据文件是dir file 还是device做出分类 如果是文件夹则打印然后退出l
+  case T_FILE:
+    printf("%s %d %d %l\n", fmtname(path), st.type, st.ino, st.size);
+    break;
+
+  case T_DIR:
+    if(strlen(path) + 1 + DIRSIZ + 1 > sizeof buf){
+      printf("ls: path too long\n");
+      break;
+    }//文件超出缓冲区则不打印
+    strcpy(buf, path); //path复制到buf里面
+    p = buf+strlen(buf);//p指向字符串末尾在buf的位置
+    *p++ = '/';//附加一个“/”符号
+    while(read(fd, &de, sizeof(de)) == sizeof(de)){  //这个地方不太明白为什么是sizeof(de)==sizeof(de) 个人感觉sizeof(de)就好了
+      if(de.inum == 0)
+        continue;
+      memmove(p, de.name, DIRSIZ);
+      p[DIRSIZ] = 0;
+      if(stat(buf, &st) < 0){
+        printf("ls: cannot stat %s\n", buf);
+        continue;
+      }
+      printf("%s %d %d %d\n", fmtname(buf), st.type, st.ino, st.size);
+    }
+    break;
+  }
+  close(fd);
+}
+// Directory is a file containing a sequence of dirent structures.
+#define DIRSIZ 14
+
+struct dirent {
+  ushort inum;
+  char name[DIRSIZ];
+};
+```
+
+```shell
+usertrap(): unexpected scause 0x000000000000000d pid=7
+            sepc=0x0000000000000110 stval=0x0000000000003008
+```
+
+如果遇到上述错误，应该是函数退出时应该使用exit(0)让操作系统知道命令结束而不是单纯return
+
