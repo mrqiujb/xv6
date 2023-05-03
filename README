@@ -36,6 +36,564 @@ Please send errors and suggestions to Frans Kaashoek and Robert Morris
 (kaashoek,rtm@mit.edu). The main purpose of xv6 is as a teaching
 operating system for MIT's 6.S081, so we are more interested in
 simplifications and clarifications than new features.
+<div align='center'><font size='70'>Xv6-lab-traps</font></div>
+
+### RISC-V assembly
+
+**1 Which registers contain arguments to functions? For example, which register holds 13 in main's call to printf?**那些寄存器保存了函数的参数？例如那个寄存器保存了13在main调用printf的时候？
+
+​		根据riscv手册我们知道a0-a7保存了函数的参数，这个参数可以是任何形式 int char 或者 point 最后都会转为uint的形式传递，然后根据约定将其恢复到原来的样子。在syscall中我们约定将系统调用号放在a7寄存器中，所以syscall function总是去a7寻找系统调用号
+
+**2 Where is the call to function f in the assembly code for main? Where is the call to g? (Hint: the compiler may inline functions.)**在什么地方汇编的主函数调用了函数f，又是在什么地方调用了g函数？提示 编译器会使用内联函数
+
+​		没有调用 直接计算 然后变成了立即数
+
+**3 At what address is the function printf located?**print函数的地址在哪？
+
+```assembly
+    printf("%d %d\n", f(8)+1, 13);
+    74:	4635                	li	a2,13
+    76:	45b1                	li	a1,12
+    78:	00000517          	auipc	a0,0x0
+    7c:	7e050513          	addi	a0,a0,2016 # 858 <malloc+0x122>
+    80:	00000097          	auipc	ra,0x0
+    84:	5f8080e7          	jalr	1528(ra) # 678 <printf>
+  	void printf(const char *fmt, ...)
+   678:	711d                	addi	sp,sp,-96
+   67a:	ec06                	sd	ra,24(sp)
+   67c:	e822                	sd	s0,16(sp)
+   67e:	1000                	addi	s0,sp,32
+```
+
+​		根据汇编代码来看，最后是jalr 0x678的位置吗，而且0x678存在print函数
+
+**4 What value is in the register ra just after the jalr to printf in main?**在main函数中 jalr之后是什么值在ra寄存器里面
+
+![](.\pics\截屏2023-02-27 19.52.58.png)
+
+​		ra放置的是返回的地址，也就算跳转前pc的值 （有的地方是pc+1）在这里应该是pc 因为uservec专门计算了一次。
+
+```c
+    // trap.c:65
+		// sepc points to the ecall instruction,
+    // but we want to return to the next instruction.
+    p->trapframe->epc += 4;
+```
+
+**5 Run the following code.**
+
+```c
+unsigned int i = 0x00646c72;
+printf("H%x Wo%s", 57616, &i);
+```
+
+**What is the output? Here's an ASCII table that maps bytes to characters.**
+**The output depends on that fact that the RISC-V is little-endian. If the RISC-V were instead big-endian what would you set i to in order to yield the same output? Would you need to change 57616 to a different value?**
+
+**Here's a description of little- and big-endian and a more whimsical description.**
+
+​		57616=0xe11=1110 0001 0001 0000
+​		little存储  00010000 11100001
+
+​		0x00646c72--->rld0
+
+​		如果要相反 那么字符需要反过来 数字不变
+
+**6 In the following code, what is going to be printed after 'y='? (note: the answer is not a specific value.) Why does this happen?**
+
+```c
+printf("x=%d y=%d", 3);
+```
+
+​		printf函数认为有三个参数 format字符串 x y 但是只给了两个字符串 分别位于 a0 a1 a2 那么x匹配到a1 因为a2没有被初始化所以是不确定的值以%d的形式给出
+
+```assembly
+  printf("x=%d y=%d",3);
+  24:	458d                	li	a1,3
+  26:	00000517          	auipc	a0,0x0
+  2a:	7ba50513          	addi	a0,a0,1978 # 7e0 <malloc+0xe8>
+  2e:	00000097          	auipc	ra,0x0
+  32:	60c080e7          	jalr	1548(ra) # 63a <printf>
+  printf("%d %d\n", f(8)+1, 13);
+  36:	4635                	li	a2,13
+  38:	45b1                	li	a1,12
+  3a:	00000517          	auipc	a0,0x0
+  3e:	7b650513          	addi	a0,a0,1974 # 7f0 <malloc+0xf8>
+  42:	00000097          	auipc	ra,0x0
+  46:	5f8080e7          	jalr	1528(ra) # 63a <printf>
+```
+
+### Backtrace ([moderate](https://pdos.csail.mit.edu/6.828/2020/labs/guidance.html))
+
+​	For debugging it is often useful to have a backtrace: a list of the function calls on the stack above the point at which the error occurred.
+
+​	对于调试通常有用的是回溯。当错误发生时展示函数调用栈。
+
+​	Implement a `backtrace()` function in `kernel/printf.c`. Insert a call to this function in `sys_sleep`, and then run bttest, which calls `sys_sleep`. Your output should be as follows:
+
+​	实现backtrace()函数在上述位置，插入这个函数的调用在sys_sleep中，并且运行bttest去调用sys_sleep函数，你的输出应该和下面相似。
+
+```assembly
+backtrace:
+0x0000000080002cda
+0x0000000080002bb6
+0x0000000080002898
+  
+```
+
+​		After `bttest` exit qemu. In your terminal: the addresses may be slightly different but if you run `addr2line -e kernel/kernel` (or `riscv64-unknown-elf-addr2line -e kernel/kernel`) and cut-and-paste the above addresses as follows:
+
+​		在bttest离开qemu后，在你的终端，这些地址可能不同，但是你运行上述命令通过复制黏贴这些地址的方式输出应该和下面一样。
+
+```shell
+    $ addr2line -e kernel/kernel
+    0x0000000080002de2
+    0x0000000080002f4a
+    0x0000000080002bfc
+    Ctrl-D
+```
+
+​		You should see something like this:
+
+```shell
+    kernel/sysproc.c:74
+    kernel/syscall.c:224
+    kernel/trap.c:85
+  
+```
+
+​		The compiler puts in each stack frame a frame pointer that holds the address of the caller's frame pointer. Your `backtrace` should use these frame pointers to walk up the stack and print the saved return address in each stack frame.
+
+​		这个编译器会为每一个进程放置一个栈指针去保存调用函数的地址。你的函数应该利用这些指针去遍历这个栈然后打印返回的地址为每个进程。
+
+Some hints:
+
+- Add the prototype for backtrace to `kernel/defs.h` so that you can invoke `backtrace` in `sys_sleep`.
+
+- The GCC compiler stores the frame pointer of the currently executing function in the register s0. Add the following function to
+
+  ```c
+  kernel/riscv.h
+  static inline uint64
+  r_fp()
+  {
+    uint64 x;
+    asm volatile("mv %0, s0" : "=r" (x) );
+    return x;
+  }
+  ```
+
+  and call this function in backtrace to read the current frame pointer. This function uses in-line assembly to read s0.
+
+- These [lecture notes](https://pdos.csail.mit.edu/6.828/2020/lec/l-riscv-slides.pdf) have a picture of the layout of stack frames. Note that the return address lives at a fixed offset (-8) from the frame pointer of a stackframe, and that the saved frame pointer lives at fixed offset (-16) from the frame pointer.
+
+- Xv6 allocates one page for each stack in the xv6 kernel at PAGE-aligned address. You can compute the top and bottom address of the stack page by using `PGROUNDDOWN(fp)` and `PGROUNDUP(fp)` (see `kernel/riscv.h`. These number are helpful for `backtrace` to terminate its loop.
+
+​	Once your backtrace is working, call it from `panic` in `kernel/printf.c` so that you see the kernel's backtrace when it panics.
+
+
+
+​	首先根据hints的提示添加好整体框架。
+
+```c
+// def.h:79
+// printf.c
+void            printf(char*, ...);
+void            panic(char*) __attribute__((noreturn));
+void            printfinit(void);
+void            backtrace();
+```
+
+```c
+//riscv.h:9
+//返回s0的内容
+static inline uint64
+r_fp()
+{
+  uint64 x;
+  asm volatile("mv %0, s0" : "=r" (x) );
+  return x;
+}
+```
+
+```c
+//sysproc.c:55
+uint64 sys_sleep(void)
+{
+  int n;
+  uint ticks0;
+
+  if(argint(0, &n) < 0)
+    return -1;
+  acquire(&tickslock);
+  ticks0 = ticks;
+  while(ticks - ticks0 < n){
+    if(myproc()->killed){
+      release(&tickslock);
+      return -1;
+    }
+    sleep(&ticks, &tickslock);
+  }
+  backtrace();
+  release(&tickslock);
+  return 0;
+}
+```
+
+```c
+//kernel/printf.c:136
+void backtrace()
+{
+  printf("backtrace:\n");
+  return;
+}
+```
+
+​		然后开始写backtrace的业务逻辑，去实现这个backtrace。首先我们知道函数调用栈的概念，假设一个进程拥有一个函数调用栈，然后发生了如下调用 main->a->b->c。现在程序执行来到了函数c，但是main a b 还没有执行完，他们的一些变量不能释放，即某些寄存器的值需要在调用的时候进行保存，而这些数据就会保存在这个stack中。根据上述表示，我么知道trap->syscall->sysproc这样的顺序，我们观察这些函数的汇编代码，仅需观察部分。
+
+```assembly
+    #kernel.asm
+    #trap.c:37 usertrap()
+    8000281c:	1101                	addi	sp,sp,-32
+    8000281e:	ec06                	sd	ra,24(sp)
+    80002820:	e822                	sd	s0,16(sp)
+    80002822:	e426                	sd	s1,8(sp)
+    80002824:	e04a                	sd	s2,0(sp)
+    80002826:	1000                	addi	s0,sp,32
+    ...
+    syscall();
+    80002872:	00000097          		auipc	ra,0x0
+    80002876:	2e0080e7          		jalr	736(ra) # 80002b52 <syscall>
+    
+    #syscall.c:134 syscall()
+    80002b52:	1101                	addi	sp,sp,-32
+    80002b54:	ec06                	sd	ra,24(sp)
+    80002b56:	e822                	sd	s0,16(sp)
+    80002b58:	e426                	sd	s1,8(sp)
+    80002b5a:	e04a                	sd	s2,0(sp)
+    80002b5c:	1000                	addi	s0,sp,32
+    ...
+    p->trapframe->a0 = syscalls[num]();
+    80002b8e:	9782                	jalr	a5
+    80002b90:	06a93823          		sd	a0,112(s2)
+    80002b94:	a839                	j	80002bb2 <syscall+0x60>
+    
+    #sysproc.c:56 sys_sleep()
+    80002c9e:	7139                	addi	sp,sp,-64
+    80002ca0:	fc06                	sd	ra,56(sp)
+    80002ca2:	f822                	sd	s0,48(sp)
+    80002ca4:	f426                	sd	s1,40(sp)
+    80002ca6:	f04a                	sd	s2,32(sp)
+    80002ca8:	ec4e                	sd	s3,24(sp)
+    80002caa:	0080                	addi	s0,sp,64
+    ...
+    backtrace();
+    80002d14:	ffffe097          		auipc	ra,0xffffe
+    80002d18:	a8a080e7          		jalr	-1398(ra) # 8000079e <backtrace>
+    
+    #kernel/printf.c:137 backtrace()
+    8000079e:	7179                	addi	sp,sp,-48
+    800007a0:	f406                	sd	ra,40(sp)
+    800007a2:	f022                	sd	s0,32(sp)
+    800007a4:	ec26                	sd	s1,24(sp)
+    800007a6:	e84a                	sd	s2,16(sp)
+    800007a8:	e44e                	sd	s3,8(sp)
+    800007aa:	1800                	addi	s0,sp,48
+```
+
+​		由于trap之前属于用户空间，之后属于内核空间，所以只考虑trap之后的，可以看到trap先是申请了一段栈保存了上面调用的数据，这一段我们不关心，然后经过一段逻辑使用jalr跳转到syscall函数，syscall函数申请了32的空间，然后保存了ra s0 s1 s2 一个寄存器占八个正好32。然后经过一些处理跳转到了sys_sleep函数，sleep函数申请了64的空间保存了 ra s0 s1 s2 s3，然后跳转到backtrace里面，申请了48的空间，保存ra s0 s1 s2 s3。
+
+​		根据上面代码我们推断如下几点。
+
+1. 每个函数占用的栈去大小不等，有32 48 64的
+
+2. sp指针指向的是低地址 因为addi sp, sp ,-48
+
+3. 数据增长从高地址向低地址增长，根据代码顺序每次都是先存大的偏移量再存小的 也就是sp+的数字变小
+
+4. 固定区域保存固定数据，例如栈保存的第一个数据一定是ra 第二个一定是s0然后是寄存器，变量
+
+5. 每次进行完数据的保存也就是那一堆sd命令之后，s0寄存器都会变成sp+48。s0寄存器也叫做fp寄存器
+
+   上述表述用一张图表示如下。
+
+   
+
+   ![](C:\Users\qiujingbao\Desktop\xv6_note\pics\截屏2023-02-27 20.57.16.png)
+
+​		提示给我的读取fp寄存器的函数会读取到当前fp的数据，当前fp指针保存的是保存了上个函数变量的地址的部分。那么从fp向下偏移一定位置就是上个函数的返回地址。而上个函数保存的fp指针也是偏移一定位置，ra是8 fp是16.所以核心代码便写出来了。
+
+```c
+void backtrace()
+{
+  printf("backtrace:\n");
+  uint64 fp=r_fp();
+  uint64 top=PGROUNDUP(fp);
+  while (fp<top)
+  {
+    uint64 ra=*(uint64 *)(fp-8);
+    fp=*((uint64 *)(fp-16));
+    printf("%p\n",ra);
+  }
+  return;
+}
+```
+
+​		获取当前fp地址，然后偏移8得到当前函数的ra，然后取偏移16的fp更新fp。最后循环往复。到什么地方停止？提示说这个函数调用栈会被分配一个页面，所以直接对齐这个页面就是这个页的起始地址，又因为是从高地址向低地址增长所以选择向上对齐，只要小与这个地址便可以继续打印。
+
+​		读取fp寄存器给我们返回的是uint64的数据，我们需要将这个加上一定偏移量作为地址，所以先转为uint64 *的形式然后使用取内容符号获取其内容。
+
+​		验证结果
+
+```shell
+ubuntu@VM-8-10-ubuntu:~/xv6-labs-2020$ make qemu
+xv6 kernel is booting
+hart 2 starting
+hart 1 starting
+init: starting sh
+$ bttest
+backtrace:
+0x0000000080002d1c
+0x0000000080002b90
+0x000000008000287a
+$ QEMU: Terminated
+ubuntu@VM-8-10-ubuntu:~/xv6-labs-2020$ addr2line -e kernel/kernel
+0x0000000080002d1c
+/home/ubuntu/xv6-labs-2020/kernel/sysproc.c:73
+0x0000000080002b90
+/home/ubuntu/xv6-labs-2020/kernel/syscall.c:140
+0x000000008000287a
+/home/ubuntu/xv6-labs-2020/kernel/trap.c:87
+```
+
+### Alarm ([hard](https://pdos.csail.mit.edu/6.828/2020/labs/guidance.html))
+
+​		In this exercise you'll add a feature to xv6 that periodically alerts a process as it uses CPU time. This might be useful for compute-bound processes that want to limit how much CPU time they chew up, or for processes that want to compute but also want to take some periodic action. More generally, you'll be implementing a primitive form of user-level interrupt/fault handlers; you could use something similar to handle page faults in the application, for example. Your solution is correct if it passes alarmtest and usertests.
+
+​		在这个练习中你将为xv6添加一个新特性，依靠cpu时间定期的提醒进程。这是对xxx型程序有用，将限制其占用cpu的时间，或者对想要计算但是又要周期性动作的进程有用。更广泛的讲，你讲实现一个用户级中断/错误处理程序。例如，您可以使用类似的方法来处理应用程序中的页面错误。如果您的解决方案通过了alarmtest和usertests，那么它就是正确的。
+
+​	You should add a new `sigalarm(interval, handler)` system call. If an application calls `sigalarm(n, fn)`, then after every `n` "ticks" of CPU time that the program consumes, the kernel should cause application function `fn` to be called. When `fn` returns, the application should resume where it left off. A tick is a fairly arbitrary unit of time in xv6, determined by how often a hardware timer generates interrupts. If an application calls `sigalarm(0, 0)`, the kernel should stop generating periodic alarm calls.
+
+​	你应该添加一个新的叫`sigalarm(interval, handler)` 做的系统调用，如果一个程序调用这个系统调用，将在程序每消耗n个 tick cpu时间之后，内核应该调用handler函数处理。当handler返回时，这个程序应该从中断的地方开始。tick在xv6中是一个相当任意的时间单位，由硬件计时器生成中断的频率决定。如果应用程序调用sigalarm(0,0)，内核应该停止产生周期性的告警调用。
+
+​	You'll find a file `user/alarmtest.c` in your xv6 repository. Add it to the Makefile. It won't compile correctly until you've added `sigalarm` and `sigreturn` system calls (see below).
+
+​	您将在xv6存储库中找到一个文件user/alarmtest.c。将其添加到Makefile中。只有添加了sigalarm和sigreturn系统调用(见下文)，它才能正确编译。
+
+​	`alarmtest` calls `sigalarm(2, periodic)` in `test0` to ask the kernel to force a call to `periodic()` every 2 ticks, and then spins for a while. You can see the assembly code for alarmtest in user/alarmtest.asm, which may be handy for debugging. Your solution is correct when `alarmtest` produces output like this and usertests also runs correctly:
+
+​	alarmtest在test0中调用sigalarm(2, periodic)，要求内核每隔2个tick强制调用periodic()，然后旋转一段时间。您可以在user/alarmtest中看到alarmtest的程序集代码。Asm，这可能便于调试。当alarmtest产生如下输出且usertests也正常运行时，您的解决方案是正确的:
+
+​	When you're done, your solution will be only a few lines of code, but it may be tricky to get it right. We'll test your code with the version of alarmtest.c in the original repository. You can modify alarmtest.c to help you debug, but make sure the original alarmtest says that all the tests pass.
+
+​	完成后，您的解决方案将只有几行代码，但要正确操作可能很棘手。我们将使用原始存储库中的armarmtest.c版本测试您的代码。您可以修改armarmtest.c来帮助您调试，但请确保原始armarmtest显示所有测试都通过了。
+
+### test0: invoke handler
+
+​	Get started by modifying the kernel to jump to the alarm handler in user space, which will cause test0 to print "alarm!". Don't worry yet what happens after the "alarm!" output; it's OK for now if your program crashes after printing "alarm!". Here are some hints:
+
+​	首先修改内核以跳转到用户空间中的警报处理程序，这将导致test0打印“alarm!”。不要担心在“alarm!”输出之后会发生什么;如果你的程序在打印“alarm!”后崩溃，现在没关系。这里有一些提示:
+
+- You'll need to modify the Makefile to cause `alarmtest.c` to be compiled as an xv6 user program.
+
+- 您需要修改Makefile以使alarmtest.c被编译成一个xv6用户程序。
+
+- The right declarations to put in
+
+  ```
+      int sigalarm(int ticks, void (*handler)());
+      int sigreturn(void);
+  ```
+
+- Update user/usys.pl (which generates user/usys.S), kernel/syscall.h, and kernel/syscall.c to allow `alarmtest` to invoke the sigalarm and sigreturn system calls.
+
+- 更新用户/usys.pl(生成用户/usys.S)、kernel/syscall.h和kernel/syscall.c，允许alarmtest调用sigalarm和sigreturn系统调用。
+
+- For now, your `sys_sigreturn` should just return zero.
+
+- 现在，sys_sigreturn应该只返回0。
+
+- Your `sys_sigalarm()` should store the alarm interval and the pointer to the handler function in new fields in the `proc` structure (in `kernel/proc.h`).
+
+- 您的sys_sigalarm()应该在proc结构(在kernel/proc.h中)的新字段中存储告警间隔和指向处理函数的指针。
+
+- You'll need to keep track of how many ticks have passed since the last call (or are left until the next call) to a process's alarm handler; you'll need a new field in `struct proc` for this too. You can initialize `proc` fields in `allocproc()` in `proc.c`.
+
+- 您需要跟踪自上次调用（或直到下一次调用）到进程的警报处理程序以来有多少滴答；为此，您还需要在struct proc中创建一个新字段。您可以在proc.c.c的allocproc()中初始化proc字段。
+
+- Every tick, the hardware clock forces an interrupt, which is handled in `usertrap()` in `kernel/trap.c`.
+
+- 每次滴答，硬件时钟都会强制中断，这在kernel/trap.c中的usertrap()中处理。
+
+- You only want to manipulate a process's alarm ticks if there's a timer interrupt; you want something like
+
+- 你只希望在计时器中断的情况下操纵进程的警报滴答声;你想要的是
+
+  ```
+      if(which_dev == 2) ...
+  ```
+
+- Only invoke the alarm function if the process has a timer outstanding. Note that the address of the user's alarm function might be 0 (e.g., in user/alarmtest.asm, `periodic` is at address 0).
+
+- 只有在进程有定时器未完成时才调用alarm函数。注意，用户的告警函数的地址可能是0(例如，在user/alarmtest.asm，`periodic`是在地址0)。
+
+- You'll need to modify `usertrap()` so that when a process's alarm interval expires, the user process executes the handler function. When a trap on the RISC-V returns to user space, what determines the instruction address at which user-space code resumes execution?
+
+- 您需要修改usertrap()，以便当进程的警报间隔到期时，用户进程执行处理程序函数。当RISC-V上的trap返回到用户空间时，是什么决定用户空间代码恢复执行的指令地址?
+
+- It will be easier to look at traps with gdb if you tell qemu to use only one CPU, which you can do by running
+
+- 如果您告诉qemu只使用一个CPU，那么使用gdb查看陷阱会更容易，这可以通过运行来实现
+
+  ```
+      make CPUS=1 qemu-gdb
+  ```
+
+- You've succeeded if alarmtest prints "alarm!".
+
+- 如果alarmtest打印成功"alarm!".
+
+### test1/test2(): resume interrupted code
+
+​	Chances are that alarmtest crashes in test0 or test1 after it prints "alarm!", or that alarmtest (eventually) prints "test1 failed", or that alarmtest exits without printing "test1 passed". To fix this, you must ensure that, when the alarm handler is done, control returns to the instruction at which the user program was originally interrupted by the timer interrupt. You must ensure that the register contents are restored to the values they held at the time of the interrupt, so that the user program can continue undisturbed after the alarm. Finally, you should "re-arm" the alarm counter after each time it goes off, so that the handler is called periodically.
+
+​	在test0或test1中，alarmtest很可能在输出“alarm!”后崩溃，或者alarmtest(最终)输出“test1 failed”，或者alarmtest退出而没有输出“test1 passed”。要解决这个问题，必须确保当告警处理程序完成时，控制返回到用户程序最初被计时器中断中断的指令。必须确保寄存器内容恢复到中断时的值，以便用户程序在报警后可以不受干扰地继续运行。最后，您应该在每次警报计数器熄灭后“重新调用”它，以便定期调用处理程序。
+
+​	As a starting point, we've made a design decision for you: user alarm handlers are required to call the `sigreturn` system call when they have finished. Have a look at `periodic` in `alarmtest.c` for an example. This means that you can add code to `usertrap` and `sys_sigreturn` that cooperate to cause the user process to resume properly after it has handled the alarm.
+
+​	作为起点，我们为您做出了一个设计决定：用户警报处理程序必须在完成后调用sigreturn系统调用。例如，请查看armarmtest.c中的周期性。这意味着您可以向usertrap和sys_sigreturn添加代码，这些代码合作使用户进程在处理完警报后正常恢复。
+
+Some hints:
+
+- Your solution will require you to save and restore registers---what registers do you need to save and restore to resume the interrupted code correctly? (Hint: it will be many).
+- 您的解决方案将要求您保存和恢复寄存器——您需要保存和恢复哪些寄存器才能正确地恢复中断的代码?(提示:会有很多)。
+- Have `usertrap` save enough state in `struct proc` when the timer goes off that `sigreturn` can correctly return to the interrupted user code.
+- 当定时器结束时，让usertrap在struct proc中保存足够的状态，使sigreturn能够正确地返回被中断的用户代码。
+- Prevent re-entrant calls to the handler----if a handler hasn't returned yet, the kernel shouldn't call it again. `test2` tests this.
+- 如果处理程序还没有返回，则防止对处理程序----的重入调用，内核不应该再次调用它。Test2对此进行测试。
+
+Once you pass `test0`, `test1`, and `test2` run `usertests` to make sure you didn't break any other parts of the kernel.
+
+通过test0、test1和test2后，运行usertests以确保没有破坏内核的任何其他部分。
+
+​	根据上面提示，需要增加两个系统调用，分别是sys_sigalarm和sys_sigreturn。根据syscall实验中的内容，我们增加这两个系统调用。
+
+```c
+//user.h
+int sigalarm(int ticks, void (*handler)());
+int sigreturn(void);
+//usys.pl
+entry("sigalarm");
+entry("sigreturn");
+$U/_alarmtest\
+//syscall.h
+#define SYS_sigalarm  22
+#define SYS_sigreturn  23
+//syscall.c
+extern uint64 sys_sigalarm(void);
+extern uint64 sys_sigreturn(void);
+
+static uint64 (*syscalls[])(void) = {
+...
+[SYS_sigalarm]   sys_sigalarm,
+[SYS_sigreturn]   sys_sigreturn,
+};
+
+//sysproc.c
+uint64 sys_sigalarm(void){}
+uint64 sys_sigreturn(void){}
+```
+
+​	然后理清楚这个框架的逻辑，一般我们的函数调用就是a调用b，b调用c，c返回b，b返回a这样子和双向链表一样。然后他这逻辑和我们一般的不太一样，详见如下图。
+
+![](.\pics\截屏2023-02-28 18.45.38.png)
+
+​	首先根据黑色的线，有函数调用sigalarm传递两个参数一个是handler的地址一个是触发handler的时间间隔，然后经过usertrap和syscall的中转到达sys_sigalarm,然后设置程序的一些参数，包括保存handler的地址，保存时间间隔，保存距离上次执行的时间等。然后逐步返回至用户空间，然后正常执行其他代码。
+
+​	随后随着程序累计时间达到我们设置的间隔时间，usertarp直接执行handler函数，handler函数的最后一步必须调用sigreturn函数，如上述黄线。此函数进入usertrap函数随后进入syscall函数随后进入sys_sigreturn函数，sigreturn函数设置trapframe然后返回syscall返回usertrap，usertrap返回到user空间程序执行的代码，如上述粉线。然后依次循环往复，知道sigalarm函数将时间间隔设为0.
+
+​	为了实现功能的正常执行，因为timer会进入usertrap此时的trapframe就是我们需要返回的trapframe也就是alarmtest正常运行的trapframe，然后handler会仅需进入usertrap函数，如果不加处理那么handler函数最后部分调用sigreturn进入usertrap时，便会将上面alarmtest正常执行的trapframe覆盖，那么返回时进入的事handler而不是我们需要的alarmtest。所以当timer进入usertrap的时候我们应该保存这个trapframe，到sigreturn的时候在恢复这个trapframe。这样就实现了上述功能。
+
+```c
+//sysproc.c
+uint64
+sys_sigalarm(void)
+{
+  int n;
+  uint64 fun_handler;
+  //argxxx 本质是获取p->trapframe->ax寄存器的内容 前边数字代表几号寄存器
+  if (argint(0, &n) < 0)
+    return -1;
+  // 函数需要传入一个指针，但是这个指针必须指向一片分配好的空间
+  // 一开始报错写法
+  // uint64 *fun_handler=0;
+  // argaddr(1,fun_handler)
+  // 试图向0地址写入内容当然报错
+  if (argaddr(1, &fun_handler) < 0)
+    return -1;
+
+  struct proc *p = myproc();
+  //配置参数
+  p->tick_cycle = n;
+  p->tick_handler=fun_handler;
+  p->timer_trapframe=0;
+  p->ticks=0;
+  return 0;
+}
+
+uint64
+sys_sigreturn(void)
+{
+  struct proc *p = myproc();
+  if(p->timer_trapframe!=0)
+  {
+    //储存trapframe
+    memmove(p->trapframe, p->timer_trapframe, sizeof(struct trapframe));
+    kfree(p->timer_trapframe);
+    p->timer_trapframe=0;
+  }
+  p->ticks=0;
+  return 0;
+}
+
+//trap.c
+if (which_dev == 2)
+  {
+  	//如果时间间隔大于零，那么定时出发handler
+    if (p->tick_cycle > 0)
+    {
+			//开启后时间自动++
+      p->ticks++;
+      //如果累计时间达到时间间隔，那么调用handler
+      if (p->ticks == p->tick_cycle)
+      {
+        //恢复trapframe
+        if (p->timer_trapframe==0)
+        {
+          p->timer_trapframe=kalloc();
+          memmove(p->timer_trapframe, p->trapframe, sizeof(struct trapframe));
+          //设置epc执行结束后跳转到handler函数
+          p->trapframe->epc = p->tick_handler;
+        }
+      }
+    }
+    yield();
+  }
+  
+  struct proc {
+    struct spinlock lock;
+    ...
+    uint64 ticks;                //自从上一次定时器触发累计的时间
+    uint64 tick_cycle;					//时间间隔
+    uint64 tick_handler;				//handler地址
+    struct trapframe *timer_trapframe; //保存的trapframe的地址 需要kalloc分配
+	};
+```
+
+​	然后还有一个功能test2测试的，就是如果处理程序还没有返回，则防止对处理程序的重入调用，内核不应该再次调用它。就是同时不能handler调用两次，这里我们可以设置一个flag表示，当进入到usertrap的trapframe的时候我们先检查标志位，如果没有设置则设置之后进入trapframe保存及以下流程，然后当从sigreturn返回的时候清除这个标志位那样其他请求便可以进来了。当然我们有一个timer_trapframe的指针，我们利用这个指针，如果空的时候那么证明没有其他handler运行，则分配空间进入执行，到sigreturn的时候释放这个地址，指针为空。
+
+![](.\pics\截屏2023-02-28 19.15.12.png)
+
 
 BUILDING AND RUNNING XV6
 
